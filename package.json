@@ -1,0 +1,13 @@
+{
+  "name": "@bitua/pi-reviewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch": "bun run src/fetch-pr.ts",
+    "review": "bun run src/review.ts",
+    "comment": "bun run src/comment.ts",
+    "check": "bun run src/check.ts",
+    "run": "bun run src/run.ts"
+  }
+}
