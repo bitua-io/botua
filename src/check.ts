@@ -28,7 +28,7 @@ if (!token) {
 
 const [owner, repo] = values.repo.split("/");
 const sha = values.sha!;
-const CHECK_NAME = "Pi Review";
+const CHECK_NAME = "Botua";
 
 // If no verdict, create an in_progress check
 if (!values["verdict-json"]) {
@@ -36,8 +36,8 @@ if (!values["verdict-json"]) {
   await createOrUpdateCheck({
     status,
     output: {
-      title: "Pi Review — In Progress",
-      summary: "Reviewing PR with Kimi K2.5...",
+      title: "Botua — In Progress",
+      summary: "Botua is reviewing...",
     },
   });
   process.exit(0);
@@ -73,8 +73,8 @@ function verdictToCheck(v: ReviewVerdict): CheckResult {
 
   const icon = v.approved ? "✅" : "❌";
   const title = v.approved
-    ? "Pi Review — Approved"
-    : `Pi Review — Changes Requested (${criticalCount} critical, ${importantCount} important)`;
+    ? "Botua — Approved"
+    : `Botua — Changes Requested (${criticalCount} critical, ${importantCount} important)`;
 
   // Summary is a condensed version for the check run UI
   let summary = v.summary + "\n\n";

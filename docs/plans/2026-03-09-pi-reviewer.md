@@ -1,4 +1,4 @@
-# Pi PR Reviewer — Implementation Plan
+# Botua — PR Review Agent — Implementation Plan
 
 > **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 

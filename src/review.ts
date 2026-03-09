@@ -42,11 +42,11 @@ if (values["pr-json"]) {
   diffContent = prInfo.diff;
 
   // Write PR data to temp file for the extension to read
-  prDataPath = "/tmp/pi-reviewer-pr-data.json";
+  prDataPath = "/tmp/botua-pr-data.json";
   await Bun.write(prDataPath, JSON.stringify(prInfo));
 } else {
   diffContent = await Bun.file(resolve(values.diff!)).text();
-  prDataPath = "/tmp/pi-reviewer-pr-data.json";
+  prDataPath = "/tmp/botua-pr-data.json";
   // Write minimal PR data for extension
   await Bun.write(
     prDataPath,
@@ -55,13 +55,13 @@ if (values["pr-json"]) {
 }
 
 // Write diff to temp file for @file reference
-const diffPath = "/tmp/pi-reviewer-diff.patch";
+const diffPath = "/tmp/botua-diff.patch";
 await Bun.write(diffPath, diffContent);
 
 // Write system prompt to a temp file — passing it as --system-prompt CLI arg
 // works via Bun.spawn (no shell escaping), but using a temp SYSTEM.md in a
 // temp .pi dir is cleaner and avoids arg length limits on large prompts.
-const tempPiDir = "/tmp/pi-reviewer-config";
+const tempPiDir = "/tmp/botua-config";
 await Bun.write(`${tempPiDir}/SYSTEM.md`, await Bun.file(promptPath).text());
 
 // Build pi command

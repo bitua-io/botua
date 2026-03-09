@@ -108,7 +108,7 @@ export default function (pi: ExtensionAPI) {
         );
         const data = await res.json();
         const checks = (data.check_runs || [])
-          .filter((c: any) => c.name !== "Pi Review")
+          .filter((c: any) => c.name !== "Botua")
           .map((c: any) => ({
             name: c.name,
             status: c.status,

@@ -1,6 +1,6 @@
-# Pi Reviewer
+# Botua
 
-Bun/TypeScript project. Modular scripts for PR review automation using Pi CLI with Kimi K2.5.
+Bitua's PR review agent. Modular Bun/TypeScript scripts that use Pi CLI with Kimi K2.5 to review pull requests.
 
 ## Scripts
 - Each `src/*.ts` file is independently runnable via CLI args

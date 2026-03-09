@@ -29,7 +29,7 @@ const [owner, repo] = values.repo.split("/");
 const prNumber = parseInt(values.pr!);
 const verdict: ReviewVerdict = JSON.parse(await Bun.file(values["verdict-json"]!).text());
 
-const MARKER = "<!-- pi-reviewer -->";
+const MARKER = "<!-- botua -->";
 const body = formatComment(verdict);
 
 if (values["dry-run"]) {
@@ -38,7 +38,7 @@ if (values["dry-run"]) {
   process.exit(0);
 }
 
-// Find existing pi-reviewer comment
+// Find existing botua comment
 const existingId = await findExistingComment();
 
 if (existingId) {
@@ -56,9 +56,9 @@ function formatComment(v: ReviewVerdict): string {
   const status = v.approved ? "Approved" : "Changes Requested";
 
   let md = `${MARKER}\n`;
-  md += `## ${icon} Pi Review — ${status}\n\n`;
+  md += `## ${icon} Botua — ${status}\n\n`;
   md += v.raw;
-  md += `\n\n---\n*Reviewed by [Pi](https://github.com/niclas-niclas/pi) with Kimi K2.5*`;
+  md += `\n\n---\n*Reviewed by Botua (Kimi K2.5)*`;
 
   return md;
 }
