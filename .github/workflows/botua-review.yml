@@ -14,6 +14,7 @@ on:
 jobs:
   review:
     runs-on: [self-hosted, ARM64]
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: write
@@ -23,7 +24,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # full history needed for PR diff generation
 
       - name: Clone Botua
         run: |
