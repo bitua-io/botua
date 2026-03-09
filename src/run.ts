@@ -75,19 +75,27 @@ log(`PR: "${prInfo.title}" by ${prInfo.author} (${prInfo.changedFiles.length} fi
 const prJsonPath = "/tmp/botua-pr-data.json";
 await Bun.write(prJsonPath, JSON.stringify(prInfo));
 
-// --- Step 2: Create in-progress check ---
+// --- Step 2: Create in-progress check + progress comment ---
+let progressCommentId: string | undefined;
+
 if (!dryRun && !values["skip-check"]) {
   log("Creating in-progress check run...");
-  const checkProc = Bun.spawnSync(
+  Bun.spawnSync(
     [
       "bun", "run", resolve(projectRoot, "src/check.ts"),
       "--repo", values.repo!, "--sha", prInfo.headSha, "--status", "in_progress",
     ],
     { env: { ...process.env, GITHUB_TOKEN: token }, stdout: "pipe", stderr: "inherit" },
   );
-  if (checkProc.exitCode !== 0) {
-    log("Warning: failed to create in-progress check (continuing anyway)");
-  }
+}
+
+if (!dryRun) {
+  // Create a progress comment that the reviewer will update live
+  log("Creating progress comment...");
+  progressCommentId = await createProgressComment(
+    owner, repo, prNumber, token,
+  );
+  if (progressCommentId) log(`Progress comment: ${progressCommentId}`);
 }
 
 // --- Step 3: Run review ---
@@ -101,8 +109,14 @@ const reviewArgs = [
 if (values["repo-path"]) reviewArgs.push("--repo-path", resolve(values["repo-path"]));
 if (verbose) reviewArgs.push("--verbose");
 
+const reviewEnv: Record<string, string> = { ...process.env as Record<string, string> };
+if (progressCommentId) {
+  reviewEnv.BOTUA_PROGRESS_COMMENT_ID = progressCommentId;
+  reviewEnv.BOTUA_PROGRESS_REPO = `${owner}/${repo}`;
+}
+
 const reviewProc = Bun.spawn(reviewArgs, {
-  env: process.env,
+  env: reviewEnv,
   stdout: "pipe",
   stderr: verbose ? "inherit" : "pipe",
 });
@@ -167,6 +181,12 @@ if (commentProc.exitCode !== 0) {
   log("Warning: failed to post comment (continuing to check)");
 }
 
+// Delete the progress comment now that the real review is posted
+if (progressCommentId) {
+  await deleteComment(owner, repo, progressCommentId, token);
+  log("Progress comment cleaned up");
+}
+
 // --- Step 6: Complete check run ---
 if (!values["skip-check"]) {
   log("Completing check run...");
@@ -181,3 +201,54 @@ if (!values["skip-check"]) {
 
 log("Done!");
 process.exit(verdict.approved ? 0 : 1);
+
+// --- helpers ---
+
+async function createProgressComment(
+  owner: string, repo: string, prNumber: number, token: string,
+): Promise<string | undefined> {
+  const body =
+    `<!-- botua-progress -->\n` +
+    `## 🔄 Botua — Reviewing...\n\n` +
+    `- \`${new Date().toLocaleTimeString("en-US", { hour12: false })}\` Starting review...\n\n` +
+    `---\n*Live progress — updates as the review runs*`;
+
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
+      },
+    );
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return String(data.id);
+  } catch {
+    return undefined;
+  }
+}
+
+async function deleteComment(
+  owner: string, repo: string, commentId: string, token: string,
+): Promise<void> {
+  try {
+    await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
+  } catch {
+    // best-effort cleanup
+  }
+}

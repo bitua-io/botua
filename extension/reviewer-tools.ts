@@ -23,7 +23,72 @@ async function loadPRData(): Promise<any> {
   }
 }
 
+// --- Progress tracking ---
+// Reads config from env:
+//   BOTUA_PROGRESS_COMMENT_ID — GitHub comment ID to update (CI mode)
+//   BOTUA_PROGRESS_REPO       — owner/repo
+//   GITHUB_TOKEN              — for API calls
+// When no comment ID, falls back to stderr (local/debug mode).
+
+const progressSteps: string[] = [];
+
+async function updateProgress(step: string): Promise<void> {
+  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  progressSteps.push(`\`${timestamp}\` ${step}`);
+
+  const commentId = process.env.BOTUA_PROGRESS_COMMENT_ID;
+  const repoSlug = process.env.BOTUA_PROGRESS_REPO;
+  const token = process.env.GITHUB_TOKEN;
+
+  // Always print to stderr for debug visibility
+  console.error(`[botua:progress] ${step}`);
+
+  if (!commentId || !repoSlug || !token) return;
+
+  const body =
+    `<!-- botua-progress -->\n` +
+    `## 🔄 Botua — Reviewing...\n\n` +
+    progressSteps.map((s) => `- ${s}`).join("\n") +
+    `\n\n---\n*Live progress — updates as the review runs*`;
+
+  try {
+    await fetch(
+      `https://api.github.com/repos/${repoSlug}/issues/comments/${commentId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ body }),
+      },
+    );
+  } catch {
+    // Don't fail the review over a progress update
+  }
+}
+
 export default function (pi: ExtensionAPI) {
+  // Tool: report_progress
+  pi.registerTool({
+    name: "report_progress",
+    label: "Progress",
+    description:
+      "Report what you're doing right now. Call this before each major step so the PR author can see live progress. Examples: 'Reading changed files', 'Running biome check', 'Analyzing blast radius of utils.ts changes', 'Writing final verdict'.",
+    parameters: Type.Object({
+      status: Type.String({ description: "What you're currently doing (short, human-readable)" }),
+    }),
+    async execute(_id, params) {
+      const { status } = params as { status: string };
+      await updateProgress(status);
+      return {
+        content: [{ type: "text", text: "Progress reported." }],
+        details: {},
+      };
+    },
+  });
+
   // Tool: get_pr_info
   pi.registerTool({
     name: "get_pr_info",
