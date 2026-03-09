@@ -4,7 +4,7 @@
 
 **Goal:** A modular set of Bun scripts that fetch PR diffs, run Pi code review with Kimi K2.5, post review comments, and manage GitHub check status — testable locally, deployable as a Docker image for CI.
 
-**Architecture:** Individual scripts handle one concern each (fetch, review, comment, check). A CLI entrypoint orchestrates them for CI. The review prompt is a standalone markdown file loaded at runtime. Docker image packages everything with Pi pre-installed for the self-hosted ARM64 runners.
+**Architecture:** Individual scripts handle one concern each (fetch, review, comment, check). A Pi extension exposes PR-specific tools to the reviewer agent (read base file, list changes, check CI). A CLI entrypoint orchestrates them for CI. The review prompt is a standalone markdown file loaded at runtime. Docker image packages everything with Pi pre-installed for the self-hosted ARM64 runners.
 
 **Tech Stack:** Bun (TypeScript), Pi CLI (`@mariozechner/pi-coding-agent`), GitHub REST API, Docker (ARM64)
 
@@ -24,6 +24,8 @@
 │   ├── check.ts                 # Create/update GitHub check run
 │   ├── run.ts                   # CLI orchestrator (ties everything together)
 │   └── types.ts                 # Shared types
+├── extension/
+│   └── reviewer-tools.ts        # Pi extension — custom tools for the reviewer agent
 ├── prompts/
 │   └── review.md                # Review system prompt
 ├── docker/
@@ -217,7 +219,152 @@ git commit -m "feat: add review prompt template"
 
 ---
 
-### Task 4: Review Script (call Pi)
+### Task 4: Pi Extension — Reviewer Tools
+
+**Files:**
+- Create: `extension/reviewer-tools.ts`
+
+**Step 1: Write the reviewer tools extension**
+
+A Pi extension that registers custom tools the reviewer agent can call during review. These tools give the reviewer deeper context than just the diff.
+
+```typescript
+// extension/reviewer-tools.ts
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
+
+export default function (pi: ExtensionAPI) {
+
+  // Tool: get_pr_info
+  // Returns PR metadata (title, body, changed files, labels, author)
+  pi.registerTool({
+    name: "get_pr_info",
+    label: "PR Info",
+    description: "Get PR metadata: title, description, changed files list, author, labels",
+    parameters: Type.Object({}),
+    async execute() {
+      const prData = JSON.parse(
+        await Bun.file(process.env.PI_REVIEWER_PR_JSON || "/tmp/pr-data.json").text()
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify({
+          title: prData.title,
+          body: prData.body,
+          author: prData.author,
+          baseBranch: prData.baseBranch,
+          headBranch: prData.headBranch,
+          changedFiles: prData.changedFiles,
+          labels: prData.labels,
+        }, null, 2) }],
+        details: {},
+      };
+    },
+  });
+
+  // Tool: read_file_at_base
+  // Read a file as it was BEFORE the PR changes (for comparison)
+  pi.registerTool({
+    name: "read_file_at_base",
+    label: "Read Base File",
+    description: "Read a file as it was in the base branch (before PR changes). Useful for understanding what changed.",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path relative to repo root" }),
+    }),
+    async execute(_id, params) {
+      const prData = JSON.parse(
+        await Bun.file(process.env.PI_REVIEWER_PR_JSON || "/tmp/pr-data.json").text()
+      );
+      const proc = Bun.spawnSync(["git", "show", `origin/${prData.baseBranch}:${params.path}`]);
+      if (proc.exitCode !== 0) {
+        return { content: [{ type: "text", text: `File not found in base branch: ${params.path}` }], details: {} };
+      }
+      return { content: [{ type: "text", text: proc.stdout.toString() }], details: {} };
+    },
+  });
+
+  // Tool: get_ci_status
+  // Check status of other CI checks on this PR
+  pi.registerTool({
+    name: "get_ci_status",
+    label: "CI Status",
+    description: "Get status of other CI checks on this PR (tests, linting, etc.)",
+    parameters: Type.Object({}),
+    async execute() {
+      const prData = JSON.parse(
+        await Bun.file(process.env.PI_REVIEWER_PR_JSON || "/tmp/pr-data.json").text()
+      );
+      const token = process.env.GITHUB_TOKEN;
+      const res = await fetch(
+        `https://api.github.com/repos/${prData.owner}/${prData.repo}/commits/${prData.headSha}/check-runs`,
+        { headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" } }
+      );
+      const data = await res.json();
+      const checks = (data.check_runs || [])
+        .filter((c: any) => c.name !== "Pi Review")
+        .map((c: any) => ({ name: c.name, status: c.status, conclusion: c.conclusion }));
+      return { content: [{ type: "text", text: JSON.stringify(checks, null, 2) }], details: {} };
+    },
+  });
+
+  // Tool: list_related_files
+  // Find files related to changed ones (imports, tests, configs)
+  pi.registerTool({
+    name: "list_related_files",
+    label: "Related Files",
+    description: "Find files that import or are imported by a given file. Useful for understanding blast radius of changes.",
+    parameters: Type.Object({
+      path: Type.String({ description: "File path to find relations for" }),
+    }),
+    async execute(_id, params) {
+      const basename = params.path.replace(/.*\//, '').replace(/\.[^.]+$/, '');
+      const proc = Bun.spawnSync(["grep", "-rl", "--include=*.ts", "--include=*.tsx", basename, "."]);
+      const files = proc.stdout.toString().trim().split('\n').filter(Boolean).slice(0, 20);
+      return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }], details: {} };
+    },
+  });
+}
+```
+
+The extension reads PR data from a JSON file written by `review.ts` before invoking pi. Environment variable `PI_REVIEWER_PR_JSON` points to it.
+
+**Tools summary:**
+| Tool | Purpose | When useful |
+|------|---------|-------------|
+| `get_pr_info` | PR metadata, changed files list | Understanding scope |
+| `read_file_at_base` | File content before changes | Comparing what changed |
+| `get_ci_status` | Other check runs status | Context on test/lint results |
+| `list_related_files` | Find imports/dependents | Assessing blast radius |
+
+These plus pi's built-in `read`, `bash`, `grep`, `find`, `ls` give the reviewer a full toolkit:
+- **`read`** — read current file content
+- **`bash`** — run `biome check`, `tsc --noEmit`, `bun test` etc.
+- **`grep`/`find`/`ls`** — explore the codebase
+- **`read_file_at_base`** — see what a file looked like before
+- **`get_ci_status`** — know if tests already passed
+
+**Step 2: Test the extension locally**
+
+```bash
+# Write test PR data
+echo '{"title":"test","body":"","baseBranch":"main","headSha":"abc","owner":"bitua-io","repo":"platform","changedFiles":["src/index.ts"]}' > /tmp/pr-data.json
+
+# Test extension loads in pi
+cd ~/projects/api
+pi -p -e ~/projects/pi-reviewer/extension/reviewer-tools.ts \
+  --tools read,bash,grep,find,ls \
+  "Use get_pr_info to show me the PR metadata"
+```
+
+**Step 3: Commit**
+
+```bash
+git add extension/reviewer-tools.ts
+git commit -m "feat: add pi extension with reviewer tools"
+```
+
+---
+
+### Task 5: Review Script (call Pi)
 
 **Files:**
 - Create: `src/review.ts`
@@ -240,15 +387,19 @@ bun run src/review.ts --pr-json ./pr-data.json --model kimi-k2-thinking
 
 Implementation:
 - Write diff to temp file
+- Write PR metadata to a JSON file the extension can read
 - Build pi command:
   ```
   pi -p --provider kimi-coding --model k2p5 \
-    --tools read,grep,find,ls \
-    --no-extensions --no-skills --no-session \
+    --tools read,bash,grep,find,ls \
+    --no-skills --no-session \
+    -e ./extension/reviewer-tools.ts \
     --system-prompt "$(cat prompts/review.md)" \
     @/tmp/diff.patch \
     "Review this PR: {title}. Description: {body}"
   ```
+- `bash` tool enabled so reviewer can run linter (`biome check`), type checker (`tsc --noEmit`), tests (`bun test`)
+- Extension loaded via `-e` flag, provides PR-specific tools
 - If `--repo-path` provided, run pi from that directory so `read` tool can access files
 - Capture stdout as the review text
 - Output raw review to stdout
@@ -270,7 +421,7 @@ git commit -m "feat: add review script (pi invocation)"
 
 ---
 
-### Task 5: Parse Verdict
+### Task 6: Parse Verdict
 
 **Files:**
 - Create: `src/parse-verdict.ts`
@@ -309,7 +460,7 @@ git commit -m "feat: add verdict parser"
 
 ---
 
-### Task 6: Comment Script
+### Task 7: Comment Script
 
 **Files:**
 - Create: `src/comment.ts`
@@ -353,7 +504,7 @@ git commit -m "feat: add comment script"
 
 ---
 
-### Task 7: Check Script
+### Task 8: Check Script
 
 **Files:**
 - Create: `src/check.ts`
@@ -402,7 +553,7 @@ git commit -m "feat: add check run script"
 
 ---
 
-### Task 8: CLI Orchestrator
+### Task 9: CLI Orchestrator
 
 **Files:**
 - Create: `src/run.ts`
@@ -449,7 +600,7 @@ git commit -m "feat: add CLI orchestrator"
 
 ---
 
-### Task 9: Docker Image
+### Task 10: Docker Image
 
 **Files:**
 - Create: `docker/Dockerfile`
@@ -472,6 +623,7 @@ RUN npm install -g @mariozechner/pi-coding-agent
 WORKDIR /reviewer
 COPY package.json ./
 COPY src/ ./src/
+COPY extension/ ./extension/
 COPY prompts/ ./prompts/
 COPY AGENTS.md ./
 
@@ -499,7 +651,7 @@ git commit -m "feat: add Dockerfile (ARM64)"
 
 ---
 
-### Task 10: Gitea CI Workflow
+### Task 11: Gitea CI Workflow
 
 **Files:**
 - Create: `.gitea/workflows/build-image.yml`
@@ -556,7 +708,7 @@ git commit -m "ci: add gitea workflow for image build"
 
 ---
 
-### Task 11: GitHub Workflow for Platform Repo
+### Task 12: GitHub Workflow for Platform Repo
 
 **Files:**
 - Create (in platform repo): `.github/workflows/pi-review.yml`
@@ -600,7 +752,7 @@ jobs:
 
 ---
 
-### Task 12: End-to-End Local Test
+### Task 13: End-to-End Local Test
 
 **Step 1: Test full pipeline against a real PR**
 
@@ -631,11 +783,11 @@ bun run src/run.ts --repo bitua-io/platform --pr <test-pr>
 
 ## Execution Order
 
-Tasks 1-8 are the core scripts (sequential, each builds on prior).
-Task 9 is the Docker image (after scripts work locally).
-Task 10 is Gitea CI (after Docker works locally).
-Task 11 is the GitHub workflow (final deployment).
-Task 12 is E2E testing (throughout, but especially after Task 8).
+Tasks 1-9 are the core scripts + extension (sequential, each builds on prior).
+Task 10 is the Docker image (after scripts work locally).
+Task 11 is Gitea CI (after Docker works locally).
+Task 12 is the GitHub workflow (final deployment).
+Task 13 is E2E testing (throughout, but especially after Task 9).
 
 ## Key Environment Variables
 
@@ -646,7 +798,8 @@ Task 12 is E2E testing (throughout, but especially after Task 8).
 
 ## Key Decisions
 
-- **Read-only tools only** (`read,grep,find,ls`) — reviewer should never modify code
+- **Read-only tools + bash** (`read,bash,grep,find,ls`) — reviewer can read code and run linters/tests but never write/edit
+- **Custom Pi extension** (`extension/reviewer-tools.ts`) — gives the reviewer PR-specific tools (base file, CI status, related files)
 - **Kimi K2.5** via `kimi-coding` provider — Marco's subscription, 262K context
 - **ARM64 only** — matches the self-hosted netcup runners
 - **Idempotent comments** — uses hidden marker to update existing review comment
