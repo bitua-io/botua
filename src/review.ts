@@ -64,6 +64,14 @@ await Bun.write(diffPath, diffContent);
 const tempPiDir = "/tmp/botua-config";
 await Bun.write(`${tempPiDir}/SYSTEM.md`, await Bun.file(promptPath).text());
 
+// Copy auth.json if it exists in the user's pi config (local dev).
+// In CI, KIMI_API_KEY env var is used instead.
+const userAuthPath = `${process.env.HOME}/.pi/agent/auth.json`;
+const tempAuthPath = `${tempPiDir}/auth.json`;
+if (await Bun.file(userAuthPath).exists() && !(await Bun.file(tempAuthPath).exists())) {
+  await Bun.write(tempAuthPath, await Bun.file(userAuthPath).text());
+}
+
 // Build pi command
 const cwd = values["repo-path"] ? resolve(values["repo-path"]) : process.cwd();
 
