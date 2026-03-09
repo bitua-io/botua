@@ -35,10 +35,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
-          PI_CMD: /tmp/botua/node_modules/@mariozechner/pi-coding-agent/dist/cli.js
         run: |
           cd /tmp/botua
           bun run src/run.ts \
             --repo "${{ github.repository }}" \
             --pr "${{ github.event.pull_request.number }}" \
             --repo-path "${{ github.workspace }}"
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf /tmp/botua /tmp/botua-*.json

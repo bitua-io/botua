@@ -90,6 +90,9 @@ if (!dryRun && !values["skip-check"]) {
 }
 
 if (!dryRun) {
+  // Clean up any orphaned progress comments from previous failed runs
+  await cleanupOrphanedProgressComments(owner, repo, prNumber, token);
+
   // Create a progress comment that the reviewer will update live
   log("Creating progress comment...");
   progressCommentId = await createProgressComment(
@@ -129,6 +132,11 @@ if (reviewExit !== 0) {
   if (!verbose) {
     const stderr = await new Response(reviewProc.stderr).text();
     log(stderr);
+  }
+  // Clean up progress comment before exiting
+  if (progressCommentId) {
+    await deleteComment(owner, repo, progressCommentId, token);
+    log("Progress comment cleaned up");
   }
   // Post failure check
   if (!dryRun && !values["skip-check"]) {
@@ -203,6 +211,26 @@ log("Done!");
 process.exit(verdict.approved ? 0 : 1);
 
 // --- helpers ---
+
+async function cleanupOrphanedProgressComments(
+  owner: string, repo: string, prNumber: number, token: string,
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`,
+      { headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" } },
+    );
+    if (!res.ok) return;
+    const comments = await res.json();
+    const orphaned = comments.filter((c: any) => c.body?.startsWith("<!-- botua-progress -->"));
+    for (const c of orphaned) {
+      await deleteComment(owner, repo, String(c.id), token);
+      log(`Cleaned up orphaned progress comment ${c.id}`);
+    }
+  } catch {
+    // best-effort
+  }
+}
 
 async function createProgressComment(
   owner: string, repo: string, prNumber: number, token: string,
