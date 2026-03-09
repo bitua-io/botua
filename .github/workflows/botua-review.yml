@@ -1,0 +1,47 @@
+# Botua — PR Review Workflow
+#
+# Add this to any repo that should get automated PR reviews.
+# Requires:
+#   - KIMI_API_KEY secret (Kimi Code subscription key)
+#   - GITEA_REGISTRY_TOKEN secret (to pull botua image from gitea.bitua.io)
+#   - GITHUB_TOKEN (automatic, needs write permissions for PRs and checks)
+#
+# The botua image is pre-built on Gitea CI and pulled from the registry.
+
+name: Botua Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: [self-hosted, ARM64]
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Login to Gitea Registry
+        uses: docker/login-action@v3
+        with:
+          registry: gitea.bitua.io
+          username: botua
+          password: ${{ secrets.GITEA_REGISTRY_TOKEN }}
+
+      - name: Run Botua Review
+        run: |
+          docker run --rm \
+            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            -e KIMI_API_KEY="${{ secrets.KIMI_API_KEY }}" \
+            -v "${{ github.workspace }}:/workspace:ro" \
+            gitea.bitua.io/bitua/botua:latest \
+            --repo "${{ github.repository }}" \
+            --pr "${{ github.event.pull_request.number }}" \
+            --repo-path /workspace
