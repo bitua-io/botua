@@ -75,8 +75,12 @@ if (await Bun.file(userAuthPath).exists() && !(await Bun.file(tempAuthPath).exis
 // Build pi command
 const cwd = values["repo-path"] ? resolve(values["repo-path"]) : process.cwd();
 
+// Use local pi from node_modules if PI_CMD is set (docker), otherwise global `pi`
+const piCmd = process.env.PI_CMD || "pi";
+const piInvokeArgs = piCmd.endsWith(".js") ? ["bun", piCmd] : [piCmd];
+
 const piArgs = [
-  "pi",
+  ...piInvokeArgs,
   "-p", // print mode
   "--provider", values.provider!,
   "--model", values.model!,

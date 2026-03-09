@@ -10,7 +10,7 @@
     "check": "bun run src/check.ts",
     "run": "bun run src/run.ts"
   },
-  "devDependencies": {
+  "dependencies": {
     "@mariozechner/pi-ai": "^0.57.1",
     "@mariozechner/pi-coding-agent": "^0.57.1"
   }
