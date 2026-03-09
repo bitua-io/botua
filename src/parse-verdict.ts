@@ -1,24 +1,26 @@
 import { parseArgs } from "util";
 import type { ReviewVerdict, ReviewIssue } from "./types";
 
-const { values } = parseArgs({
-  args: Bun.argv.slice(2),
-  options: {
-    file: { type: "string" },
-  },
-  strict: true,
-});
+// CLI mode — only when run directly
+if (import.meta.main) {
+  const { values } = parseArgs({
+    args: Bun.argv.slice(2),
+    options: {
+      file: { type: "string" },
+    },
+    strict: true,
+  });
 
-// Read review text from file or stdin
-let raw: string;
-if (values.file) {
-  raw = await Bun.file(values.file).text();
-} else {
-  raw = await new Response(Bun.stdin.stream()).text();
+  let raw: string;
+  if (values.file) {
+    raw = await Bun.file(values.file).text();
+  } else {
+    raw = await new Response(Bun.stdin.stream()).text();
+  }
+
+  const verdict = parseVerdict(raw);
+  console.log(JSON.stringify(verdict, null, 2));
 }
-
-const verdict = parseVerdict(raw);
-console.log(JSON.stringify(verdict, null, 2));
 
 // --- parsing logic ---
 
