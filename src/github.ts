@@ -140,6 +140,40 @@ export async function createCheckRun(
   return data.id;
 }
 
+/** Update an existing check run by ID */
+export async function updateCheckRun(
+  token: string,
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  params: {
+    status?: "queued" | "in_progress" | "completed";
+    conclusion?: "success" | "failure" | "action_required";
+    output?: { title: string; summary: string };
+  },
+): Promise<void> {
+  const body: any = {};
+  if (params.status) body.status = params.status;
+  if (params.conclusion) body.conclusion = params.conclusion;
+  if (params.output) body.output = params.output;
+  if (params.status === "completed") body.completed_at = new Date().toISOString();
+
+  const res = await fetch(`${API}/repos/${owner}/${repo}/check-runs/${checkRunId}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to update check run ${checkRunId}: ${res.status} ${text}`);
+  }
+}
+
 /** Post or update a comment on a PR/issue */
 export async function postComment(
   token: string,

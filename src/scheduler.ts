@@ -9,7 +9,7 @@ import type { BotuaConfig } from "./config";
 import type { JobQueue, Job } from "./queue";
 import type { WorkerMessage } from "./workers/protocol";
 import { ensureBareClone, createWorktree, removeWorktree, pruneOrphanedWorktrees } from "./repo-manager";
-import { findInstallation, getInstallationToken, createCheckRun, postComment, fetchPRDiff } from "./github";
+import { findInstallation, getInstallationToken, createCheckRun, updateCheckRun, postComment, fetchPRDiff } from "./github";
 import { parseVerdict } from "./parse-verdict";
 import type { ReviewVerdict } from "./types";
 
@@ -216,15 +216,23 @@ async function postResults(config: BotuaConfig, active: ActiveWorker, result: Re
   await postComment(token, owner, repoName, pr_number, commentBody, COMMENT_MARKER);
 
   // Complete check run
-  if (head_sha) {
-    const criticalCount = verdict.issues.filter(i => i.severity === "critical").length;
-    const importantCount = verdict.issues.filter(i => i.severity === "important").length;
+  const criticalCount = verdict.issues.filter(i => i.severity === "critical").length;
+  const importantCount = verdict.issues.filter(i => i.severity === "important").length;
 
-    const conclusion = verdict.approved ? "success" : criticalCount > 0 ? "failure" : "action_required";
-    const title = verdict.approved
-      ? "Botua \u2014 Approved"
-      : `Botua \u2014 Changes Requested (${criticalCount} critical, ${importantCount} important)`;
+  const conclusion = verdict.approved ? "success" : criticalCount > 0 ? "failure" : "action_required";
+  const title = verdict.approved
+    ? "Botua \u2014 Approved"
+    : `Botua \u2014 Changes Requested (${criticalCount} critical, ${importantCount} important)`;
 
+  if (check_run_id) {
+    // Update the existing check run created by the handler
+    await updateCheckRun(token, owner, repoName, check_run_id, {
+      status: "completed",
+      conclusion,
+      output: { title, summary: verdict.summary || "" },
+    });
+  } else if (head_sha) {
+    // Fallback: create a new check run
     await createCheckRun(token, owner, repoName, {
       name: CHECK_NAME,
       head_sha,
@@ -237,8 +245,9 @@ async function postResults(config: BotuaConfig, active: ActiveWorker, result: Re
 
 async function updateCheckRunProgress(active: ActiveWorker): Promise<void> {
   const { token, repo, payload, progressSteps } = active;
+  const checkRunId = payload.check_run_id;
   const head_sha = payload.head_sha;
-  if (!head_sha || !token) return;
+  if (!token || (!checkRunId && !head_sha)) return;
 
   const [owner, repoName] = repo.split("/");
   const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
@@ -246,15 +255,14 @@ async function updateCheckRunProgress(active: ActiveWorker): Promise<void> {
     .map((s, i) => `${i === progressSteps.length - 1 ? "\u25b6" : "\u2705"} ${s}`)
     .join("\n");
 
-  await createCheckRun(token, owner, repoName, {
-    name: CHECK_NAME,
-    head_sha,
-    status: "in_progress",
-    output: {
-      title: `Botua \u2014 Reviewing... (${timestamp})`,
-      summary: `**Progress:**\n${stepsText}`,
-    },
-  });
+  if (checkRunId) {
+    await updateCheckRun(token, owner, repoName, checkRunId, {
+      output: {
+        title: `Botua \u2014 Reviewing... (${timestamp})`,
+        summary: `**Progress:**\n${stepsText}`,
+      },
+    });
+  }
 }
 
 async function handleJobFailure(
@@ -277,15 +285,23 @@ async function handleJobFailure(
 
   // Post failure check run
   const [owner, repoName] = repo.split("/");
-  if (payload.head_sha && token) {
+  if (token) {
     try {
-      await createCheckRun(token, owner, repoName, {
-        name: CHECK_NAME,
-        head_sha: payload.head_sha,
-        status: "completed",
-        conclusion: "failure",
-        output: { title: "Botua \u2014 Review Failed", summary: `Error: ${error}` },
-      });
+      if (payload.check_run_id) {
+        await updateCheckRun(token, owner, repoName, payload.check_run_id, {
+          status: "completed",
+          conclusion: "failure",
+          output: { title: "Botua \u2014 Review Failed", summary: `Error: ${error}` },
+        });
+      } else if (payload.head_sha) {
+        await createCheckRun(token, owner, repoName, {
+          name: CHECK_NAME,
+          head_sha: payload.head_sha,
+          status: "completed",
+          conclusion: "failure",
+          output: { title: "Botua \u2014 Review Failed", summary: `Error: ${error}` },
+        });
+      }
     } catch {}
   }
 
