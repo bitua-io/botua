@@ -81,22 +81,42 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       }
     });
 
+    // Pre-load changed file contents to reduce tool calls
+    send({ type: "progress", jobId, step: "Pre-loading changed files" });
+    const fileContents: string[] = [];
+    for (const file of prData.changedFiles.slice(0, 20)) { // cap at 20 files
+      try {
+        const content = await Bun.file(`${workDir}/${file}`).text();
+        if (content.length <= 10000) { // skip very large files
+          fileContents.push(`### ${file}\n\`\`\`\n${content}\n\`\`\``);
+        } else {
+          fileContents.push(`### ${file}\n(${content.length} chars — too large to inline, use read tool)`);
+        }
+      } catch {
+        fileContents.push(`### ${file}\n(file not found in worktree)`);
+      }
+    }
+
     // Build the review prompt
     const diff = payload.diff ?? "";
     const memoriesContext = memories.length > 0
       ? `\n\nPrevious context about this repo:\n${memories.map(m => `- [${m.category}] ${m.content}`).join("\n")}\n`
       : "";
 
+    const filesSection = fileContents.length > 0
+      ? `\n\n## Changed Files (current content)\n\n${fileContents.join("\n\n")}\n`
+      : "";
+
     const prompt = [
-      "Review this pull request.",
+      "Review this pull request. The diff and full file contents are provided below — you can start reviewing immediately without reading files. Use tools only if you need additional context (related files, base branch comparison, tests, lint).",
       "",
       `Title: ${prData.title}`,
       `Description: ${prData.body || "(no description)"}`,
       `Author: ${prData.author}`,
       `Branch: ${prData.headBranch} → ${prData.baseBranch}`,
-      `Changed files: ${prData.changedFiles.join(", ")}`,
       memoriesContext,
-      diff ? `\nDiff:\n\`\`\`diff\n${diff}\n\`\`\`` : "",
+      diff ? `\n## Diff\n\`\`\`diff\n${diff}\n\`\`\`` : "",
+      filesSection,
     ].join("\n");
 
     send({ type: "progress", jobId, step: "Running review" });

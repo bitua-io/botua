@@ -23,6 +23,7 @@ interface ActiveWorker {
   timeout: Timer;
   payload: Record<string, any>;
   token: string;
+  progressSteps: string[];
 }
 
 const activeWorkers = new Map<string, ActiveWorker>();
@@ -52,6 +53,9 @@ async function pollQueue(config: BotuaConfig, queue: JobQueue): Promise<void> {
 
   const job = queue.nextJob();
   if (!job) return;
+
+  // Mark running immediately to prevent double-dispatch on next poll
+  queue.startJob(job.id);
 
   try {
     await dispatchJob(config, queue, job);
@@ -114,7 +118,7 @@ async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Prom
     handleJobFailure(config, queue, job.id, job.repo, job.payload, token, "Job timed out");
   }, timeoutMs);
 
-  activeWorkers.set(job.id, { worker, jobId: job.id, repo: job.repo, timeout, payload: job.payload, token });
+  activeWorkers.set(job.id, { worker, jobId: job.id, repo: job.repo, timeout, payload: job.payload, token, progressSteps: [] });
 
   // Handle messages from worker
   worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
@@ -126,10 +130,7 @@ async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Prom
     handleJobFailure(config, queue, job.id, job.repo, job.payload, token, event.message);
   };
 
-  // Mark job as running
-  queue.startJob(job.id);
-
-  // Send init message
+  // Send init message (job already marked running in pollQueue)
   worker.postMessage({
     type: "init",
     jobId: job.id,
@@ -157,6 +158,9 @@ async function handleWorkerMessage(config: BotuaConfig, queue: JobQueue, msg: Wo
   switch (msg.type) {
     case "progress":
       console.log(`[scheduler] job ${msg.jobId}: ${msg.step}`);
+      active.progressSteps.push(msg.step);
+      // Update check run with live progress
+      updateCheckRunProgress(active).catch(() => {});
       break;
 
     case "complete":
@@ -229,6 +233,28 @@ async function postResults(config: BotuaConfig, active: ActiveWorker, result: Re
       output: { title, summary: verdict.summary || "" },
     });
   }
+}
+
+async function updateCheckRunProgress(active: ActiveWorker): Promise<void> {
+  const { token, repo, payload, progressSteps } = active;
+  const head_sha = payload.head_sha;
+  if (!head_sha || !token) return;
+
+  const [owner, repoName] = repo.split("/");
+  const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+  const stepsText = progressSteps
+    .map((s, i) => `${i === progressSteps.length - 1 ? "\u25b6" : "\u2705"} ${s}`)
+    .join("\n");
+
+  await createCheckRun(token, owner, repoName, {
+    name: CHECK_NAME,
+    head_sha,
+    status: "in_progress",
+    output: {
+      title: `Botua \u2014 Reviewing... (${timestamp})`,
+      summary: `**Progress:**\n${stepsText}`,
+    },
+  });
 }
 
 async function handleJobFailure(
