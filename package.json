@@ -1,14 +1,15 @@
 {
   "name": "@bitua/botua",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "fetch": "bun run src/fetch-pr.ts",
-    "review": "bun run src/review.ts",
-    "comment": "bun run src/comment.ts",
-    "check": "bun run src/check.ts",
-    "run": "bun run src/run.ts"
+    "start": "bun run src/server.ts",
+    "v1:fetch": "bun run src/v1/fetch-pr.ts",
+    "v1:review": "bun run src/v1/review.ts",
+    "v1:comment": "bun run src/v1/comment.ts",
+    "v1:check": "bun run src/v1/check.ts",
+    "v1:run": "bun run src/v1/run.ts"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.57.1",

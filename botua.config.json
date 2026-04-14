@@ -1,0 +1,24 @@
+{
+  "server": {
+    "port": 7800,
+    "host": "0.0.0.0"
+  },
+  "github": {
+    "app_id": 0,
+    "private_key_path": "",
+    "webhook_secret": ""
+  },
+  "sandbox": {
+    "runtime": "podman",
+    "image": "botua-base:latest",
+    "max_concurrent_jobs": 2,
+    "job_timeout_minutes": 25
+  },
+  "ai": {
+    "model": "k2p5",
+    "provider": "kimi-coding"
+  },
+  "repos": {
+    "data_dir": "/home/botua/repos"
+  }
+}
