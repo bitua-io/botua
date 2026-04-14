@@ -24,6 +24,14 @@ export interface BotuaConfig {
   repos: {
     data_dir: string;
   };
+  scheduler: {
+    poll_interval_ms: number;
+    max_workers: number;
+  };
+  workers: {
+    review_timeout_ms: number;
+    command_timeout_ms: number;
+  };
 }
 
 const defaults: BotuaConfig = {
@@ -48,6 +56,14 @@ const defaults: BotuaConfig = {
   },
   repos: {
     data_dir: "/home/botua/repos",
+  },
+  scheduler: {
+    poll_interval_ms: 2000,
+    max_workers: 2,
+  },
+  workers: {
+    review_timeout_ms: 20 * 60 * 1000,
+    command_timeout_ms: 25 * 60 * 1000,
   },
 };
 

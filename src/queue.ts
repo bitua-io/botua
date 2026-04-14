@@ -25,15 +25,45 @@ CREATE TABLE IF NOT EXISTS events (
   received_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS memories (
+  id TEXT PRIMARY KEY,
+  repo TEXT NOT NULL,
+  category TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source_job_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_repo ON jobs(repo);
 CREATE INDEX IF NOT EXISTS idx_events_repo ON events(repo);
+CREATE INDEX IF NOT EXISTS idx_memories_repo ON memories(repo);
+CREATE INDEX IF NOT EXISTS idx_memories_repo_cat ON memories(repo, category);
 `;
 
 export interface CreateJobParams {
   repo: string;
   type: string;
   payload: Record<string, any>;
+}
+
+export interface CreateMemoryParams {
+  repo: string;
+  category: string;
+  content: string;
+  sourceJobId?: string;
+  expiresAt?: number;
+}
+
+export interface Memory {
+  id: string;
+  repo: string;
+  category: string;
+  content: string;
+  source_job_id: string | null;
+  created_at: number;
+  expires_at: number | null;
 }
 
 export interface Job {
@@ -142,8 +172,9 @@ export class JobQueue {
 
     const result = { queued: 0, running: 0, completed: 0, failed: 0 };
     for (const row of counts) {
-      if (row.status in result) {
-        (result as any)[row.status] = row.count;
+      const key = row.status === "complete" ? "completed" : row.status;
+      if (key in result) {
+        (result as any)[key] = row.count;
       }
     }
     return result;
@@ -167,6 +198,38 @@ export class JobQueue {
     return this.db.query<any, [number]>(
       `SELECT id, source, event_type, repo, job_id, received_at FROM events ORDER BY received_at DESC LIMIT ?`,
     ).all(limit);
+  }
+
+  // --- Memories ---
+
+  addMemory(params: CreateMemoryParams): string {
+    const id = crypto.randomUUID();
+    this.db.run(
+      `INSERT INTO memories (id, repo, category, content, source_job_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, params.repo, params.category, params.content, params.sourceJobId ?? null, Date.now(), params.expiresAt ?? null],
+    );
+    return id;
+  }
+
+  getMemories(repo: string, category?: string): Memory[] {
+    const now = Date.now();
+    if (category) {
+      return this.db.query<any, [string, string, number]>(
+        `SELECT * FROM memories WHERE repo = ? AND category = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC`,
+      ).all(repo, category, now).map(r => ({ ...r }) as Memory);
+    }
+    return this.db.query<any, [string, number]>(
+      `SELECT * FROM memories WHERE repo = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC`,
+    ).all(repo, now).map(r => ({ ...r }) as Memory);
+  }
+
+  pruneExpiredMemories(): number {
+    const result = this.db.run(
+      `DELETE FROM memories WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+      [Date.now()],
+    );
+    return result.changes;
   }
 
   close(): void {

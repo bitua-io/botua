@@ -12,7 +12,7 @@
     "v1:run": "bun run src/v1/run.ts"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "^0.57.1",
-    "@mariozechner/pi-coding-agent": "^0.57.1"
+    "@mariozechner/pi-ai": "^0.67.1",
+    "@mariozechner/pi-coding-agent": "^0.67.1"
   }
 }
