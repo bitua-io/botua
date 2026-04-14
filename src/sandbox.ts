@@ -18,9 +18,15 @@ export async function ensureRepoReady(
   config: BotuaConfig,
   repo: string,
   ref?: string,
+  token?: string,
 ): Promise<string> {
   const [owner, name] = repo.split("/");
   const repoDir = `${config.repos.data_dir}/${owner}/${name}`;
+
+  // Build clone URL with token auth if available
+  const cloneUrl = token
+    ? `https://x-access-token:${token}@github.com/${repo}.git`
+    : `https://github.com/${repo}.git`;
 
   if (!existsSync(repoDir)) {
     // First time — clone
@@ -28,17 +34,28 @@ export async function ensureRepoReady(
     console.log(`[sandbox] cloning ${repo} → ${repoDir}`);
 
     const cloneProc = Bun.spawnSync(
-      ["git", "clone", `https://github.com/${repo}.git`, repoDir],
+      ["git", "clone", cloneUrl, repoDir],
       { stdout: "pipe", stderr: "pipe" },
     );
 
     if (cloneProc.exitCode !== 0) {
       throw new Error(`git clone failed: ${cloneProc.stderr.toString()}`);
     }
+
+    // Remove token from stored remote URL
+    if (token) {
+      Bun.spawnSync(
+        ["git", "remote", "set-url", "origin", `https://github.com/${repo}.git`],
+        { cwd: repoDir, stdout: "pipe", stderr: "pipe" },
+      );
+    }
   } else {
-    // Fetch latest
+    // Fetch latest — use token via env for auth
     console.log(`[sandbox] fetching ${repo}`);
-    Bun.spawnSync(["git", "fetch", "origin"], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
+    const fetchUrl = token
+      ? `https://x-access-token:${token}@github.com/${repo}.git`
+      : "origin";
+    Bun.spawnSync(["git", "fetch", fetchUrl], { cwd: repoDir, stdout: "pipe", stderr: "pipe" });
   }
 
   // Checkout ref if specified

@@ -107,8 +107,8 @@ async function processReviewJob(jobId: string, config: BotuaConfig, queue: any):
   }
 
   try {
-    // Prepare repo
-    const repoDir = await ensureRepoReady(config, repo, head_branch);
+    // Prepare repo (use installation token for clone/fetch auth)
+    const repoDir = await ensureRepoReady(config, repo, head_branch, token);
 
     // Fetch the PR diff
     const diff = await fetchPRDiff(token, owner, repoName, pr_number);
