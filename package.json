@@ -5,11 +5,6 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/server.ts",
-    "v1:fetch": "bun run src/v1/fetch-pr.ts",
-    "v1:review": "bun run src/v1/review.ts",
-    "v1:comment": "bun run src/v1/comment.ts",
-    "v1:check": "bun run src/v1/check.ts",
-    "v1:run": "bun run src/v1/run.ts"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.67.1",
