@@ -74,10 +74,13 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
     });
 
     // Subscribe to events for progress tracking
-    let agentOutput = "";
     session.subscribe((event: any) => {
-      if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta") {
-        agentOutput += event.assistantMessageEvent.delta;
+      // Capture tool use progress
+      if (event.type === "tool_execution_end") {
+        const toolName = event.toolName ?? event.name;
+        if (toolName && toolName !== "report_progress") {
+          send({ type: "progress", jobId, step: `Tool: ${toolName}` });
+        }
       }
     });
 
@@ -125,6 +128,9 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
     await session.prompt(prompt);
 
     send({ type: "progress", jobId, step: "Parsing verdict" });
+
+    // Get the agent's output text
+    const agentOutput = session.getLastAssistantText?.() ?? "";
 
     // Parse the verdict
     const verdict = parseVerdict(agentOutput);
