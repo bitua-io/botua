@@ -4,9 +4,9 @@
     "host": "0.0.0.0"
   },
   "github": {
-    "app_id": 0,
-    "private_key_path": "",
-    "webhook_secret": ""
+    "app_id": 3376662,
+    "private_key_path": "./github-app.pem",
+    "webhook_secret": "f857eae5f0e3952cb054d9af8024f30838801a0f"
   },
   "sandbox": {
     "runtime": "podman",

@@ -3,6 +3,7 @@
  * All using native fetch(), no octokit.
  */
 
+import { createSign } from "crypto";
 import type { BotuaConfig } from "./config";
 
 const API = "https://api.github.com";
@@ -19,32 +20,18 @@ async function generateJWT(config: BotuaConfig): Promise<string> {
   const privateKeyPem = await Bun.file(config.github.private_key_path).text();
   const now = Math.floor(Date.now() / 1000);
 
-  // JWT header
-  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-
-  // JWT payload
-  const payload = base64url(JSON.stringify({
-    iat: now - 60, // issued 60s ago to account for clock drift
-    exp: now + (10 * 60), // expires in 10 minutes
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({
+    iat: now - 60,
+    exp: now + (10 * 60),
     iss: config.github.app_id,
-  }));
+  })).toString("base64url");
 
-  // Sign with RSA-SHA256
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    pemToBuffer(privateKeyPem),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  const sign = createSign("RSA-SHA256");
+  sign.update(`${header}.${payload}`);
+  const signature = sign.sign(privateKeyPem, "base64url");
 
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    new TextEncoder().encode(`${header}.${payload}`),
-  );
-
-  return `${header}.${payload}.${base64url(signature)}`;
+  return `${header}.${payload}.${signature}`;
 }
 
 /** Get an installation token for a repo */
@@ -280,14 +267,3 @@ export async function fetchPRDiff(
   return res.text();
 }
 
-// --- helpers ---
-
-function base64url(input: string | ArrayBuffer): string {
-  const bytes = typeof input === "string" ? new TextEncoder().encode(input) : new Uint8Array(input);
-  return Buffer.from(bytes).toString("base64url");
-}
-
-function pemToBuffer(pem: string): ArrayBuffer {
-  const lines = pem.split("\n").filter(l => !l.startsWith("-----") && l.trim().length > 0);
-  return Buffer.from(lines.join(""), "base64");
-}
