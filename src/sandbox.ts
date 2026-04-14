@@ -149,20 +149,24 @@ export async function runOnHost(
     "-p",
     "--provider", config.ai.provider,
     "--model", config.ai.model,
-    "--tools", "read,write,bash,grep,find,ls",
+    "--tools", "read,bash,grep,find,ls",
     "--no-skills",
     "--no-session",
+    "--no-prompt-templates",
     prompt,
   ];
 
   console.log(`[sandbox] running on host for job ${job.id} in ${repoDir}`);
 
+  const home = process.env.HOME ?? "/home/botua";
   const proc = Bun.spawn(piArgs, {
     cwd: repoDir,
     stdout: "pipe",
     stderr: "pipe",
     env: {
       ...process.env,
+      HOME: home,
+      PI_CODING_AGENT_DIR: `${home}/.pi/agent`,
       BOTUA_JOB: JSON.stringify({ id: job.id, type: job.type, repo: job.repo }),
     },
   });
