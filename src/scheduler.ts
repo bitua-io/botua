@@ -1,0 +1,268 @@
+/**
+ * Job scheduler — polls the queue, spawns Bun Workers, handles results.
+ *
+ * The scheduler runs in the main process event loop as a setInterval.
+ * It tracks active workers and cleans up on completion/failure/timeout.
+ */
+
+import type { BotuaConfig } from "./config";
+import type { JobQueue, Job } from "./queue";
+import type { WorkerMessage } from "./workers/protocol";
+import { ensureBareClone, createWorktree, removeWorktree, pruneOrphanedWorktrees } from "./repo-manager";
+import { findInstallation, getInstallationToken, createCheckRun, postComment, fetchPRDiff } from "./github";
+import { parseVerdict } from "./parse-verdict";
+import type { ReviewVerdict } from "./types";
+
+const COMMENT_MARKER = "<!-- botua -->";
+const CHECK_NAME = "Botua";
+
+interface ActiveWorker {
+  worker: Worker;
+  jobId: string;
+  repo: string;
+  timeout: Timer;
+  payload: Record<string, any>;
+  token: string;
+}
+
+const activeWorkers = new Map<string, ActiveWorker>();
+
+export function startScheduler(config: BotuaConfig, queue: JobQueue): void {
+  console.log(`[scheduler] starting (poll=${config.scheduler.poll_interval_ms}ms, max_workers=${config.scheduler.max_workers})`);
+
+  // Clean up orphaned worktrees from previous crashes
+  pruneOrphanedWorktrees(config).catch(() => {});
+
+  // Prune expired memories periodically (every 10 min)
+  setInterval(() => queue.pruneExpiredMemories(), 10 * 60 * 1000);
+
+  // Poll loop
+  setInterval(() => pollQueue(config, queue), config.scheduler.poll_interval_ms);
+}
+
+export function schedulerStats() {
+  return {
+    active_workers: activeWorkers.size,
+    worker_jobs: [...activeWorkers.values()].map(w => ({ jobId: w.jobId, repo: w.repo })),
+  };
+}
+
+async function pollQueue(config: BotuaConfig, queue: JobQueue): Promise<void> {
+  if (activeWorkers.size >= config.scheduler.max_workers) return;
+
+  const job = queue.nextJob();
+  if (!job) return;
+
+  try {
+    await dispatchJob(config, queue, job);
+  } catch (err: any) {
+    console.error(`[scheduler] failed to dispatch job ${job.id}:`, err.message);
+    queue.failJob(job.id, err.message);
+  }
+}
+
+async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Promise<void> {
+  const [owner, repoName] = job.repo.split("/");
+
+  // Get GitHub token
+  let token: string;
+  if (config.github.app_id) {
+    const installationId = await findInstallation(config, owner, repoName);
+    token = await getInstallationToken(config, installationId);
+  } else {
+    token = process.env.GITHUB_TOKEN ?? "";
+  }
+
+  // Prepare repo worktree
+  const ref = job.payload.head_branch ?? "main";
+  await ensureBareClone(config, job.repo, token);
+  const workDir = await createWorktree(config, job.repo, ref, job.id);
+
+  // Fetch diff if not in payload
+  if (!job.payload.diff && job.payload.pr_number) {
+    try {
+      const diff = await fetchPRDiff(token, owner, repoName, job.payload.pr_number);
+      job.payload.diff = diff;
+    } catch (err: any) {
+      console.error(`[scheduler] failed to fetch diff for ${job.repo}#${job.payload.pr_number}:`, err.message);
+    }
+  }
+
+  // Load memories for this repo
+  const memories = queue.getMemories(job.repo).map(m => ({
+    category: m.category,
+    content: m.content,
+  }));
+
+  // Determine worker type and timeout
+  const isReview = job.type === "pr-review";
+  const workerPath = isReview
+    ? new URL("./workers/review-worker.ts", import.meta.url).href
+    : new URL("./workers/command-worker.ts", import.meta.url).href;
+  const timeoutMs = isReview
+    ? config.workers.review_timeout_ms
+    : config.workers.command_timeout_ms;
+
+  const kimiApiKey = process.env.KIMI_API_KEY ?? "";
+
+  // Spawn worker
+  const worker = new Worker(workerPath);
+
+  const timeout = setTimeout(() => {
+    console.error(`[scheduler] job ${job.id} timed out after ${timeoutMs / 1000}s`);
+    worker.terminate();
+    handleJobFailure(config, queue, job.id, job.repo, job.payload, token, "Job timed out");
+  }, timeoutMs);
+
+  activeWorkers.set(job.id, { worker, jobId: job.id, repo: job.repo, timeout, payload: job.payload, token });
+
+  // Handle messages from worker
+  worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+    handleWorkerMessage(config, queue, event.data);
+  };
+
+  worker.onerror = (event: ErrorEvent) => {
+    console.error(`[scheduler] worker error for job ${job.id}:`, event.message);
+    handleJobFailure(config, queue, job.id, job.repo, job.payload, token, event.message);
+  };
+
+  // Mark job as running
+  queue.startJob(job.id);
+
+  // Send init message
+  worker.postMessage({
+    type: "init",
+    jobId: job.id,
+    repo: job.repo,
+    jobType: job.type,
+    payload: job.payload,
+    workDir,
+    githubToken: token,
+    kimiApiKey,
+    config: {
+      model: config.ai.model,
+      provider: config.ai.provider,
+      timeoutMs,
+    },
+    memories,
+  });
+
+  console.log(`[scheduler] dispatched job ${job.id} type=${job.type} repo=${job.repo}`);
+}
+
+async function handleWorkerMessage(config: BotuaConfig, queue: JobQueue, msg: WorkerMessage): Promise<void> {
+  const active = activeWorkers.get(msg.jobId);
+  if (!active) return;
+
+  switch (msg.type) {
+    case "progress":
+      console.log(`[scheduler] job ${msg.jobId}: ${msg.step}`);
+      break;
+
+    case "complete":
+      clearTimeout(active.timeout);
+      activeWorkers.delete(msg.jobId);
+      active.worker.terminate();
+
+      console.log(`[scheduler] job ${msg.jobId} complete`);
+      queue.completeJob(msg.jobId, msg.result);
+
+      // Post results to GitHub
+      await postResults(config, active, msg.result).catch(err => {
+        console.error(`[scheduler] failed to post results for ${msg.jobId}:`, err.message);
+      });
+
+      // Clean up worktree
+      removeWorktree(config, active.repo, msg.jobId).catch(() => {});
+      break;
+
+    case "error":
+      clearTimeout(active.timeout);
+      activeWorkers.delete(msg.jobId);
+      active.worker.terminate();
+
+      console.error(`[scheduler] job ${msg.jobId} error: ${msg.error}`);
+      handleJobFailure(config, queue, msg.jobId, active.repo, active.payload, active.token, msg.error);
+      break;
+
+    case "memory":
+      queue.addMemory({
+        repo: msg.repo,
+        category: msg.category,
+        content: msg.content,
+        sourceJobId: msg.jobId,
+      });
+      break;
+  }
+}
+
+async function postResults(config: BotuaConfig, active: ActiveWorker, result: Record<string, any>): Promise<void> {
+  const [owner, repoName] = active.repo.split("/");
+  const { pr_number, head_sha, check_run_id } = active.payload;
+  const token = active.token;
+  const verdict = result.verdict as ReviewVerdict | undefined;
+
+  if (!verdict || !pr_number) return;
+
+  // Post review comment
+  const icon = verdict.approved ? "\u2705" : "\u274C";
+  const status = verdict.approved ? "Approved" : "Changes Requested";
+  const commentBody = `${COMMENT_MARKER}\n## ${icon} Botua \u2014 ${status}\n\n${verdict.raw}\n\n---\n*Reviewed by Botua*`;
+
+  await postComment(token, owner, repoName, pr_number, commentBody, COMMENT_MARKER);
+
+  // Complete check run
+  if (head_sha) {
+    const criticalCount = verdict.issues.filter(i => i.severity === "critical").length;
+    const importantCount = verdict.issues.filter(i => i.severity === "important").length;
+
+    const conclusion = verdict.approved ? "success" : criticalCount > 0 ? "failure" : "action_required";
+    const title = verdict.approved
+      ? "Botua \u2014 Approved"
+      : `Botua \u2014 Changes Requested (${criticalCount} critical, ${importantCount} important)`;
+
+    await createCheckRun(token, owner, repoName, {
+      name: CHECK_NAME,
+      head_sha,
+      status: "completed",
+      conclusion,
+      output: { title, summary: verdict.summary || "" },
+    });
+  }
+}
+
+async function handleJobFailure(
+  config: BotuaConfig,
+  queue: JobQueue,
+  jobId: string,
+  repo: string,
+  payload: Record<string, any>,
+  token: string,
+  error: string,
+): Promise<void> {
+  const active = activeWorkers.get(jobId);
+  if (active) {
+    clearTimeout(active.timeout);
+    active.worker.terminate();
+    activeWorkers.delete(jobId);
+  }
+
+  queue.failJob(jobId, error);
+
+  // Post failure check run
+  const [owner, repoName] = repo.split("/");
+  if (payload.head_sha && token) {
+    try {
+      await createCheckRun(token, owner, repoName, {
+        name: CHECK_NAME,
+        head_sha: payload.head_sha,
+        status: "completed",
+        conclusion: "failure",
+        output: { title: "Botua \u2014 Review Failed", summary: `Error: ${error}` },
+      });
+    } catch {}
+  }
+
+  // Clean up worktree
+  removeWorktree(config, repo, jobId).catch(() => {});
+}
