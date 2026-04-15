@@ -9,7 +9,7 @@ import type { BotuaConfig } from "./config";
 import type { JobQueue, Job } from "./queue";
 import type { WorkerMessage } from "./workers/protocol";
 import { ensureBareClone, createWorktree, removeWorktree, pruneOrphanedWorktrees } from "./repo-manager";
-import { findInstallation, getInstallationToken, createCheckRun, updateCheckRun, postComment, fetchPRDiff } from "./github";
+import { findInstallation, getInstallationToken, createCheckRun, updateCheckRun, postComment, fetchPRDiff, fetchPRComments } from "./github";
 import { parseVerdict } from "./parse-verdict";
 import type { ReviewVerdict } from "./types";
 
@@ -82,13 +82,23 @@ async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Prom
   await ensureBareClone(config, job.repo, token);
   const workDir = await createWorktree(config, job.repo, ref, job.id);
 
-  // Fetch diff if not in payload
-  if (!job.payload.diff && job.payload.pr_number) {
-    try {
-      const diff = await fetchPRDiff(token, owner, repoName, job.payload.pr_number);
-      job.payload.diff = diff;
-    } catch (err: any) {
-      console.error(`[scheduler] failed to fetch diff for ${job.repo}#${job.payload.pr_number}:`, err.message);
+  // Fetch diff and PR comments if not in payload
+  if (job.payload.pr_number) {
+    if (!job.payload.diff) {
+      try {
+        const diff = await fetchPRDiff(token, owner, repoName, job.payload.pr_number);
+        job.payload.diff = diff;
+      } catch (err: any) {
+        console.error(`[scheduler] failed to fetch diff for ${job.repo}#${job.payload.pr_number}:`, err.message);
+      }
+    }
+    if (!job.payload.pr_comments) {
+      try {
+        const comments = await fetchPRComments(token, owner, repoName, job.payload.pr_number);
+        job.payload.pr_comments = comments;
+      } catch (err: any) {
+        console.error(`[scheduler] failed to fetch comments for ${job.repo}#${job.payload.pr_number}:`, err.message);
+      }
     }
   }
 

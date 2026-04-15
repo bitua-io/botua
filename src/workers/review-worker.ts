@@ -110,6 +110,30 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       ? `\n\n## Changed Files (current content)\n\n${fileContents.join("\n\n")}\n`
       : "";
 
+    // Build PR conversation history (previous reviews + user replies)
+    const prComments: Array<{ author: string; body: string; created_at: string; is_bot: boolean }> = payload.pr_comments ?? [];
+    let conversationSection = "";
+    if (prComments.length > 0) {
+      const relevant = prComments
+        .filter(c => c.body.includes("<!-- botua -->") || c.body.toLowerCase().includes("@botua") || c.body.toLowerCase().includes("false positive") || c.body.toLowerCase().includes("won't fix") || c.body.toLowerCase().includes("next pr") || c.body.toLowerCase().includes("out of scope"))
+        .map(c => {
+          const role = c.body.includes("<!-- botua -->") ? "Botua (previous review)" : `@${c.author}`;
+          // Truncate long review comments to the summary
+          let body = c.body;
+          if (body.includes("<!-- botua -->") && body.length > 500) {
+            // Extract just the verdict/summary section
+            const verdictMatch = body.match(/##.*?(?:Verdict|Status|Approved|Changes Requested)[\s\S]*$/im);
+            const summaryMatch = body.match(/##.*?Summary[\s\S]*?(?=##|$)/im);
+            body = (summaryMatch?.[0] ?? "") + "\n" + (verdictMatch?.[0] ?? body.slice(0, 500) + "...");
+          }
+          return `**${role}** (${c.created_at}):\n${body}`;
+        });
+
+      if (relevant.length > 0) {
+        conversationSection = `\n\n## PR Conversation History\n\nThese are previous reviews and comments on this PR. Pay attention to:\n- Your own previous reviews (learn from and be consistent with what you already said)\n- User replies indicating something is a false positive, out of scope, or will be addressed in a follow-up PR\n- Do NOT re-raise issues that the author has already acknowledged or explained\n\n${relevant.join("\n\n---\n\n")}\n`;
+      }
+    }
+
     const prompt = [
       "Review this pull request. The diff and full file contents are provided below — you can start reviewing immediately without reading files. Use tools only if you need additional context (related files, base branch comparison, tests, lint).",
       "",
@@ -118,6 +142,7 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       `Author: ${prData.author}`,
       `Branch: ${prData.headBranch} → ${prData.baseBranch}`,
       memoriesContext,
+      conversationSection,
       diff ? `\n## Diff\n\`\`\`diff\n${diff}\n\`\`\`` : "",
       filesSection,
     ].join("\n");

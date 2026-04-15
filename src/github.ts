@@ -279,6 +279,32 @@ export async function addReaction(
   );
 }
 
+/** Fetch comments on a PR/issue */
+export async function fetchPRComments(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<Array<{ author: string; body: string; created_at: string; is_bot: boolean }>> {
+  const res = await fetch(
+    `${API}/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100`,
+    {
+      headers: {
+        Authorization: `token ${token}`,
+        Accept: "application/vnd.github+json",
+      },
+    },
+  );
+  if (!res.ok) return [];
+  const comments = await res.json();
+  return comments.map((c: any) => ({
+    author: c.user?.login ?? "unknown",
+    body: c.body ?? "",
+    created_at: c.created_at,
+    is_bot: c.user?.type === "Bot" || c.performed_via_github_app != null,
+  }));
+}
+
 /** Fetch PR diff from GitHub */
 export async function fetchPRDiff(
   token: string,
