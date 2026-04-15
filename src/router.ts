@@ -1,6 +1,7 @@
 import type { BotuaConfig } from "./config";
 import type { JobQueue } from "./queue";
 import { handlePRReview } from "./handlers/pr-review";
+import { findInstallation, getInstallationToken, addReaction } from "./github";
 
 export interface WebhookContext {
   source: "github" | "gitea";
@@ -72,7 +73,7 @@ function routeGiteaEvent(ctx: WebhookContext): Promise<RouteResult | null> {
 }
 
 async function handleMention(ctx: WebhookContext): Promise<RouteResult | null> {
-  const { payload } = ctx;
+  const { payload, config } = ctx;
   const comment = payload.comment?.body ?? "";
 
   // Only handle @botua mentions
@@ -82,29 +83,37 @@ async function handleMention(ctx: WebhookContext): Promise<RouteResult | null> {
 
   const repo = payload.repository?.full_name;
   const prNumber = payload.issue?.number ?? payload.pull_request?.number;
+  const commentId = payload.comment?.id;
   const command = extractCommand(comment);
 
   console.log(`[router] @botua command: "${command}" on ${repo}#${prNumber}`);
 
   // Handle re-review command — force a new review even if already reviewed
   if (/^re-?review$/i.test(command) || command === "review") {
+    await reactToComment(config, repo, commentId, "rocket");
     return handlePRReview({ ...ctx, payload: { ...payload, _force_review: true } });
   }
 
-  // Queue an interactive command job
-  const jobId = ctx.queue.createJob({
-    repo,
-    type: "pr-command",
-    payload: {
-      pr_number: prNumber,
-      command,
-      comment_id: payload.comment?.id,
-      comment_body: comment,
-      user: payload.comment?.user?.login ?? payload.sender?.login,
-    },
-  });
+  // For any other @botua mention — acknowledge with 👀 reaction.
+  // The comment itself becomes context for the next review (via PR comment fetching).
+  // No job needed — the user's message is already stored in the PR thread.
+  await reactToComment(config, repo, commentId, "eyes");
 
-  return { jobId, action: "pr-command" };
+  console.log(`[router] acknowledged @botua mention on ${repo}#${prNumber}: "${command}"`);
+  return { action: "acknowledged", skipped: "message noted — will be included in next review context" };
+}
+
+/** React to a comment on GitHub */
+async function reactToComment(config: BotuaConfig, repo: string, commentId: number, reaction: string): Promise<void> {
+  if (!repo || !commentId || !config.github.app_id) return;
+  try {
+    const [owner, repoName] = repo.split("/");
+    const installationId = await findInstallation(config, owner, repoName);
+    const token = await getInstallationToken(config, installationId);
+    await addReaction(token, owner, repoName, commentId, reaction);
+  } catch (err: any) {
+    console.error(`[router] failed to react to comment:`, err.message);
+  }
 }
 
 function extractCommand(comment: string): string {
