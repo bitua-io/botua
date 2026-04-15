@@ -62,13 +62,14 @@ export async function ensureBareClone(
       );
     }
   } else {
-    // Fetch latest
+    // Fetch latest — update remote-tracking refs (origin/*) so worktrees can check out by branch name
     console.log(`[repo] fetching: ${repo}`);
     const fetchUrl = token
       ? `https://x-access-token:${token}@github.com/${repo}.git`
       : overrideUrl ?? "origin";
 
-    Bun.spawnSync(["git", "fetch", fetchUrl, "--prune"], {
+    // Use refspec to ensure refs/heads/* maps to refs/remotes/origin/*
+    Bun.spawnSync(["git", "fetch", fetchUrl, "+refs/heads/*:refs/remotes/origin/*", "--prune"], {
       cwd: barePath,
       stdout: "pipe",
       stderr: "pipe",
