@@ -109,7 +109,7 @@ export class JobQueue {
     return id;
   }
 
-  /** Get the next job to run, respecting concurrency and per-repo serialization */
+  /** Get the next job to run, respecting concurrency limit */
   nextJob(): Job | null {
     // Check concurrent limit
     const running = this.db.query<{ count: number }, []>(
@@ -118,22 +118,11 @@ export class JobQueue {
 
     if (running.count >= this.maxConcurrent) return null;
 
-    // Get repos with running jobs (to serialize per repo)
-    const busyRepos = this.db.query<{ repo: string }, []>(
-      `SELECT DISTINCT repo FROM jobs WHERE status = 'running'`,
-    ).all().map(r => r.repo);
-
-    // Find next queued job not in a busy repo
-    let query = `SELECT * FROM jobs WHERE status = 'queued'`;
-    const params: string[] = [];
-    if (busyRepos.length > 0) {
-      const placeholders = busyRepos.map(() => "?").join(", ");
-      query += ` AND repo NOT IN (${placeholders})`;
-      params.push(...busyRepos);
-    }
-    query += ` ORDER BY created_at ASC LIMIT 1`;
-
-    const row = this.db.query<any, string[]>(query).get(...params);
+    // Find next queued job (FIFO). Per-repo serialization removed —
+    // git worktrees provide isolation so concurrent jobs on the same repo are safe.
+    const row = this.db.query<any, []>(
+      `SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`,
+    ).get();
     if (!row) return null;
 
     return rowToJob(row);

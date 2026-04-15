@@ -59,7 +59,7 @@ const defaults: BotuaConfig = {
   },
   scheduler: {
     poll_interval_ms: 2000,
-    max_workers: 2,
+    max_workers: 3,
   },
   workers: {
     review_timeout_ms: 20 * 60 * 1000,

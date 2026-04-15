@@ -20,5 +20,13 @@
   },
   "repos": {
     "data_dir": "/home/botua/repos"
+  },
+  "scheduler": {
+    "poll_interval_ms": 2000,
+    "max_workers": 3
+  },
+  "workers": {
+    "review_timeout_ms": 1200000,
+    "command_timeout_ms": 1500000
   }
 }

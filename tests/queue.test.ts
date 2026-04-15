@@ -33,16 +33,16 @@ describe("job queue", () => {
     expect(first!.repo).toBe("org/a");
   });
 
-  test("nextJob skips repos with running jobs", () => {
+  test("nextJob allows concurrent jobs on same repo (worktree isolation)", () => {
     const id1 = queue.createJob({ repo: "org/a", type: "pr-review", payload: {} });
     const id2 = queue.createJob({ repo: "org/a", type: "pr-review", payload: {} });
-    const id3 = queue.createJob({ repo: "org/b", type: "pr-review", payload: {} });
 
     queue.startJob(id1);
 
     const next = queue.nextJob();
     expect(next).not.toBeNull();
-    expect(next!.repo).toBe("org/b");
+    expect(next!.id).toBe(id2);
+    expect(next!.repo).toBe("org/a");
   });
 
   test("nextJob respects max concurrent limit", () => {
