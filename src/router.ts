@@ -86,6 +86,11 @@ async function handleMention(ctx: WebhookContext): Promise<RouteResult | null> {
 
   console.log(`[router] @botua command: "${command}" on ${repo}#${prNumber}`);
 
+  // Handle re-review command — force a new review even if already reviewed
+  if (/^re-?review$/i.test(command) || command === "review") {
+    return handlePRReview({ ...ctx, payload: { ...payload, _force_review: true } });
+  }
+
   // Queue an interactive command job
   const jobId = ctx.queue.createJob({
     repo,
@@ -98,11 +103,6 @@ async function handleMention(ctx: WebhookContext): Promise<RouteResult | null> {
       user: payload.comment?.user?.login ?? payload.sender?.login,
     },
   });
-
-  // React with eyes emoji to acknowledge
-  if (ctx.source === "github" && ctx.config.github.app_id) {
-    // TODO: react with 👀 once GitHub App client is ready
-  }
 
   return { jobId, action: "pr-command" };
 }

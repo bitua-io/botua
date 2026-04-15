@@ -90,6 +90,38 @@ describe("job queue", () => {
     expect(stats.queued).toBe(0);
   });
 
+  test("hasReviewForSha deduplicates reviews", () => {
+    expect(queue.hasReviewForSha("org/a", "abc123")).toBe(false);
+
+    const id = queue.createJob({
+      repo: "org/a",
+      type: "pr-review",
+      payload: { head_sha: "abc123", pr_number: 1 },
+    });
+
+    // Queued job counts
+    expect(queue.hasReviewForSha("org/a", "abc123")).toBe(true);
+    // Different sha doesn't match
+    expect(queue.hasReviewForSha("org/a", "def456")).toBe(false);
+    // Different repo doesn't match
+    expect(queue.hasReviewForSha("org/b", "abc123")).toBe(false);
+
+    // Complete the job — still counts
+    queue.startJob(id);
+    queue.completeJob(id, {});
+    expect(queue.hasReviewForSha("org/a", "abc123")).toBe(true);
+
+    // Failed jobs don't count (allow retry)
+    const id2 = queue.createJob({
+      repo: "org/a",
+      type: "pr-review",
+      payload: { head_sha: "fail789", pr_number: 2 },
+    });
+    queue.startJob(id2);
+    queue.failJob(id2, "timeout");
+    expect(queue.hasReviewForSha("org/a", "fail789")).toBe(false);
+  });
+
   test("logEvent and linkEventToJob", () => {
     const eventId = queue.logEvent("github", "pull_request.opened", "org/a", '{"action":"opened"}');
     const jobId = queue.createJob({ repo: "org/a", type: "pr-review", payload: {} });

@@ -200,6 +200,16 @@ export class JobQueue {
     ).all(limit);
   }
 
+  /** Check if a review job already exists for a given head SHA (queued, running, or complete) */
+  hasReviewForSha(repo: string, headSha: string): boolean {
+    const row = this.db.query<{ cnt: number }, [string, string]>(
+      `SELECT COUNT(*) as cnt FROM jobs 
+       WHERE repo = ? AND type = 'pr-review' AND status IN ('queued', 'running', 'complete')
+       AND json_extract(payload, '$.head_sha') = ?`,
+    ).get(repo, headSha);
+    return (row?.cnt ?? 0) > 0;
+  }
+
   // --- Memories ---
 
   addMemory(params: CreateMemoryParams): string {
