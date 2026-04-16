@@ -9,6 +9,7 @@ import type { InitMessage, WorkerMessage } from "./protocol";
 import { createModelSetup } from "../models";
 import {
   createAgentSession,
+  createReadOnlyTools,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
@@ -185,14 +186,25 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
 
     send({ type: "progress", jobId, step: "Creating agent session" });
 
+    // Pass at least one built-in tool so pi's tool-calling loop activates
+    const builtInTools = createReadOnlyTools(process.cwd());
+
     const { session } = await createAgentSession({
       cwd: process.cwd(),
       model,
       modelRegistry,
       authStorage,
-      tools: [],
+      tools: builtInTools,
       customTools: commandTools,
       sessionManager: SessionManager.inMemory(),
+    });
+
+    // Subscribe to events for debugging
+    session.subscribe((event: any) => {
+      if (event.type === "tool_execution_end") {
+        const toolName = event.toolName ?? event.name ?? "unknown";
+        send({ type: "progress", jobId, step: `Tool: ${toolName}` });
+      }
     });
 
     // Build the prompt
