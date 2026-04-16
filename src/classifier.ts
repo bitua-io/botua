@@ -87,24 +87,32 @@ self.onmessage = async (event: MessageEvent<ClassifyRequest>) => {
       tools: [],
       customTools: [],
       sessionManager: SessionManager.inMemory(),
-      systemPrompt: SYSTEM_PROMPT,
     });
 
     // Truncate review to keep prompt small
-    const reviewSummary = req.reviewBody.length > 1000
-      ? req.reviewBody.slice(0, 1000) + "\n... (truncated)"
+    const reviewSummary = req.reviewBody.length > 1500
+      ? req.reviewBody.slice(0, 1500) + "\n... (truncated)"
       : req.reviewBody;
 
-    const prompt = `## Botua's Review (check: ${req.checkConclusion})
+    // Include system prompt in the user message since createAgentSession
+    // doesn't support systemPrompt parameter
+    const prompt = `${SYSTEM_PROMPT}
+
+---
+
+## Botua's Review (check status: ${req.checkConclusion || "unknown"})
 ${reviewSummary}
 
 ## New Comment by @${req.commentAuthor}
 ${req.comment}
 
-Classify this comment. Respond with JSON only.`;
+Classify this comment. Respond with ONLY a JSON object.`;
+
+    console.log(`[classifier] classifying comment by @${req.commentAuthor}: "${req.comment.slice(0, 80)}..."`);
 
     await session.prompt(prompt);
     const output = session.getLastAssistantText?.() ?? "";
+    console.log(`[classifier] raw output: ${output.slice(0, 200)}`);
 
     // Parse the JSON response
     const jsonMatch = output.match(/\{[\s\S]*\}/);
@@ -130,6 +138,7 @@ Classify this comment. Respond with JSON only.`;
       } satisfies ClassifyResponse);
     }
   } catch (err: any) {
+    console.error(`[classifier] error:`, err.message, err.stack?.split("\n")[1] ?? "");
     self.postMessage({
       type: "classification",
       id: req.id,
