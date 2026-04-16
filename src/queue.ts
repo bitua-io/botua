@@ -189,6 +189,16 @@ export class JobQueue {
     ).all(limit);
   }
 
+  /** Check if a completed review exists for a given PR number */
+  hasCompletedReviewForPR(repo: string, prNumber: number): boolean {
+    const row = this.db.query<{ cnt: number }, [string, number]>(
+      `SELECT COUNT(*) as cnt FROM jobs 
+       WHERE repo = ? AND type = 'pr-review' AND status = 'complete'
+       AND json_extract(payload, '$.pr_number') = ?`,
+    ).get(repo, prNumber);
+    return (row?.cnt ?? 0) > 0;
+  }
+
   /** Check if a review job already exists for a given head SHA (queued, running, or complete) */
   hasReviewForSha(repo: string, headSha: string): boolean {
     const row = this.db.query<{ cnt: number }, [string, string]>(

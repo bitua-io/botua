@@ -90,6 +90,30 @@ describe("job queue", () => {
     expect(stats.queued).toBe(0);
   });
 
+  test("hasCompletedReviewForPR checks for completed reviews", () => {
+    expect(queue.hasCompletedReviewForPR("org/a", 1)).toBe(false);
+
+    const id = queue.createJob({
+      repo: "org/a",
+      type: "pr-review",
+      payload: { pr_number: 1, head_sha: "abc" },
+    });
+
+    // Queued job doesn't count
+    expect(queue.hasCompletedReviewForPR("org/a", 1)).toBe(false);
+
+    // Running doesn't count
+    queue.startJob(id);
+    expect(queue.hasCompletedReviewForPR("org/a", 1)).toBe(false);
+
+    // Complete counts
+    queue.completeJob(id, {});
+    expect(queue.hasCompletedReviewForPR("org/a", 1)).toBe(true);
+
+    // Different PR doesn't match
+    expect(queue.hasCompletedReviewForPR("org/a", 2)).toBe(false);
+  });
+
   test("hasReviewForSha deduplicates reviews", () => {
     expect(queue.hasReviewForSha("org/a", "abc123")).toBe(false);
 
