@@ -12,6 +12,7 @@ import { ensureBareClone, createWorktree, removeWorktree, pruneOrphanedWorktrees
 import { findInstallation, getInstallationToken, createCheckRun, updateCheckRun, postComment, fetchPRDiff, fetchPRComments } from "./github";
 import { parseVerdict } from "./parse-verdict";
 import type { ReviewVerdict } from "./types";
+import { recoverInterruptedJobs } from "./recovery";
 
 const COMMENT_MARKER = "<!-- botua -->";
 const CHECK_NAME = "Botua";
@@ -28,8 +29,18 @@ interface ActiveWorker {
 
 const activeWorkers = new Map<string, ActiveWorker>();
 
-export function startScheduler(config: BotuaConfig, queue: JobQueue): void {
+export async function startScheduler(config: BotuaConfig, queue: JobQueue): Promise<void> {
   console.log(`[scheduler] starting (poll=${config.scheduler.poll_interval_ms}ms, max_workers=${config.scheduler.max_workers})`);
+
+  // Recover jobs interrupted by a previous crash/restart
+  try {
+    const stats = await recoverInterruptedJobs(config, queue);
+    if (stats.recovered > 0 || stats.checkRunsUpdated > 0 || stats.worktreesCleaned > 0) {
+      console.log(`[scheduler] recovery complete:`, stats);
+    }
+  } catch (err: any) {
+    console.error(`[scheduler] recovery failed:`, err.message);
+  }
 
   // Clean up orphaned worktrees from previous crashes
   pruneOrphanedWorktrees(config).catch(() => {});

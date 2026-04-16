@@ -154,6 +154,11 @@ export class JobQueue {
     return row ? rowToJob(row) : null;
   }
 
+  getRunningJobs(): Job[] {
+    const rows = this.db.query<any, []>(`SELECT * FROM jobs WHERE status = 'running'`).all();
+    return rows.map(rowToJob);
+  }
+
   stats(): { queued: number; running: number; completed: number; failed: number } {
     const counts = this.db.query<{ status: string; count: number }, []>(
       `SELECT status, COUNT(*) as count FROM jobs GROUP BY status`,
