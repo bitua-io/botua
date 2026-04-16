@@ -44,11 +44,11 @@ function classify(req: Omit<ClassifyRequest, "type" | "id">): Promise<ClassifyRe
   const id = crypto.randomUUID();
   const worker = getClassifier();
   return new Promise((resolve) => {
-    // Timeout after 30s
+    // Timeout after 60s (kimi can be slow on first call)
     const timeout = setTimeout(() => {
       pendingClassifications.delete(id);
       resolve({ type: "classification", id, relevant: false, intent: "unrelated", confidence: 0, reason: "timeout" });
-    }, 30_000);
+    }, 60_000);
 
     pendingClassifications.set(id, (result) => {
       clearTimeout(timeout);
@@ -139,7 +139,8 @@ async function handleComment(ctx: WebhookContext): Promise<RouteResult | null> {
   }
 
   // Path 2: No mention → check if PR has a botua review, then classify
-  return handlePassiveClassification(ctx, comment, repo, prNumber, commentId, commentAuthor);
+  // Pass the stripped comment so the classifier sees the actual message, not quoted noise
+  return handlePassiveClassification(ctx, unquotedComment, repo, prNumber, commentId, commentAuthor);
 }
 
 /** Handle explicit @botua mentions — fast path, always acts */
@@ -171,12 +172,13 @@ async function handleDirectMention(
 /** Handle non-mentioned comments — classify first, only act if relevant */
 async function handlePassiveClassification(
   ctx: WebhookContext,
-  comment: string,
+  strippedComment: string,
   repo: string,
   prNumber: number,
   commentId: number,
   commentAuthor: string,
 ): Promise<RouteResult | null> {
+  const fullComment = ctx.payload.comment?.body ?? strippedComment;
   const { config } = ctx;
 
   // Quick check: does this PR have a botua review? (check the queue for completed review jobs)
@@ -236,7 +238,7 @@ async function handlePassiveClassification(
   console.log(`[router] classifying comment by @${commentAuthor} on ${repo}#${prNumber}`);
 
   const result = await classify({
-    comment,
+    comment: strippedComment,
     commentAuthor,
     reviewBody,
     checkConclusion,
@@ -251,7 +253,7 @@ async function handlePassiveClassification(
 
   // Relevant comment detected — react and queue command job
   await reactToComment(config, repo, commentId, "eyes");
-  return queueCommandJob(ctx, repo, prNumber, commentId, comment, comment, commentAuthor);
+  return queueCommandJob(ctx, repo, prNumber, commentId, fullComment, strippedComment, commentAuthor);
 }
 
 /** Queue a command job for the command worker to process */
