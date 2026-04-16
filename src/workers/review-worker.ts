@@ -114,17 +114,26 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
     const prComments: Array<{ author: string; body: string; created_at: string; is_bot: boolean }> = payload.pr_comments ?? [];
     let conversationSection = "";
     if (prComments.length > 0) {
+      // Include all human comments + botua comments (not other bots like sonarcloud)
       const relevant = prComments
-        .filter(c => c.body.includes("<!-- botua -->") || c.body.toLowerCase().includes("@botua") || c.body.toLowerCase().includes("false positive") || c.body.toLowerCase().includes("won't fix") || c.body.toLowerCase().includes("next pr") || c.body.toLowerCase().includes("out of scope"))
+        .filter(c => {
+          // Always include botua reviews
+          if (c.body.includes("<!-- botua -->")) return true;
+          // Include botua bot replies (from command worker)
+          if (c.author.includes("botua")) return true;
+          // Include all human comments — they might discuss the review in any language
+          if (!c.is_bot) return true;
+          return false;
+        })
         .map(c => {
-          const role = c.body.includes("<!-- botua -->") ? "Botua (previous review)" : `@${c.author}`;
-          // Truncate long review comments to the summary
+          const isBotReview = c.body.includes("<!-- botua -->");
+          const role = isBotReview ? "Botua (previous review)" : c.is_bot ? "Botua" : `@${c.author}`;
           let body = c.body;
-          if (body.includes("<!-- botua -->") && body.length > 500) {
-            // Extract just the verdict/summary section
+          // Truncate long review comments to key sections
+          if (isBotReview && body.length > 1500) {
             const verdictMatch = body.match(/##.*?(?:Verdict|Status|Approved|Changes Requested)[\s\S]*$/im);
-            const summaryMatch = body.match(/##.*?Summary[\s\S]*?(?=##|$)/im);
-            body = (summaryMatch?.[0] ?? "") + "\n" + (verdictMatch?.[0] ?? body.slice(0, 500) + "...");
+            const issuesMatch = body.match(/###.*?(?:⚠️|📝|🚨|Critical|Important|Minor|Recommended)[\s\S]*/im);
+            body = (issuesMatch?.[0] ?? "") + "\n" + (verdictMatch?.[0] ?? body.slice(0, 1000) + "...");
           }
           return `**${role}** (${c.created_at}):\n${body}`;
         });
