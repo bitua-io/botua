@@ -47,7 +47,7 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       {
         name: "create_github_issue",
         description: "Create a new issue on the repository. Use this when the user asks to create an issue, track something, or file a follow-up task.",
-        inputSchema: Type.Object({
+        parameters: Type.Object({
           title: Type.String({ description: "Issue title" }),
           body: Type.String({ description: "Issue body in markdown" }),
           labels: Type.Optional(Type.Array(Type.String(), { description: "Labels to add" })),
@@ -75,7 +75,7 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       {
         name: "update_check_run",
         description: "Update the Botua check run on this PR. Use this to change the conclusion (e.g., from 'action_required' to 'success') when the user acknowledges all review issues.",
-        inputSchema: Type.Object({
+        parameters: Type.Object({
           conclusion: Type.Union([
             Type.Literal("success"),
             Type.Literal("action_required"),
@@ -135,7 +135,7 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       {
         name: "comment_on_pr",
         description: "Post a comment on the PR explaining what you did.",
-        inputSchema: Type.Object({
+        parameters: Type.Object({
           body: Type.String({ description: "Comment body in markdown" }),
         }),
         execute: async (input: { body: string }) => {
@@ -154,7 +154,7 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
       {
         name: "get_review_context",
         description: "Get the latest Botua review and check run status for this PR.",
-        inputSchema: Type.Object({}),
+        parameters: Type.Object({}),
         execute: async () => {
           const prNumber = payload.pr_number;
           if (!prNumber) return "No PR number";
