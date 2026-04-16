@@ -17,7 +17,7 @@ import { recoverInterruptedJobs } from "./recovery";
 const COMMENT_MARKER = "<!-- botua -->";
 const CHECK_NAME = "Botua";
 
-interface ActiveWorker {
+export interface ActiveWorker {
   worker: Worker;
   jobId: string;
   repo: string;
@@ -27,9 +27,14 @@ interface ActiveWorker {
   progressSteps: string[];
 }
 
+export interface SchedulerHandle {
+  stop: () => void;
+  get activeWorkers(): Map<string, ActiveWorker>;
+}
+
 const activeWorkers = new Map<string, ActiveWorker>();
 
-export async function startScheduler(config: BotuaConfig, queue: JobQueue): Promise<void> {
+export async function startScheduler(config: BotuaConfig, queue: JobQueue): Promise<SchedulerHandle> {
   console.log(`[scheduler] starting (poll=${config.scheduler.poll_interval_ms}ms, max_workers=${config.scheduler.max_workers})`);
 
   // Recover jobs interrupted by a previous crash/restart
@@ -46,10 +51,20 @@ export async function startScheduler(config: BotuaConfig, queue: JobQueue): Prom
   pruneOrphanedWorktrees(config).catch(() => {});
 
   // Prune expired memories periodically (every 10 min)
-  setInterval(() => queue.pruneExpiredMemories(), 10 * 60 * 1000);
+  const pruneInterval = setInterval(() => queue.pruneExpiredMemories(), 10 * 60 * 1000);
 
   // Poll loop
-  setInterval(() => pollQueue(config, queue), config.scheduler.poll_interval_ms);
+  const pollInterval = setInterval(() => pollQueue(config, queue), config.scheduler.poll_interval_ms);
+
+  return {
+    stop() {
+      clearInterval(pruneInterval);
+      clearInterval(pollInterval);
+    },
+    get activeWorkers() {
+      return activeWorkers;
+    },
+  };
 }
 
 export function schedulerStats() {

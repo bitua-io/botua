@@ -2,6 +2,7 @@ import { loadConfig } from "./config";
 import { routeEvent } from "./router";
 import { JobQueue } from "./queue";
 import { startScheduler, schedulerStats } from "./scheduler";
+import { setupGracefulShutdown } from "./shutdown";
 
 const config = loadConfig();
 const queue = new JobQueue(undefined, config.scheduler.max_workers);
@@ -9,7 +10,7 @@ const startTime = Date.now();
 
 console.log(`[botua] starting on ${config.server.host}:${config.server.port}`);
 
-Bun.serve({
+const server = Bun.serve({
   port: config.server.port,
   hostname: config.server.host,
 
@@ -41,7 +42,8 @@ Bun.serve({
 console.log(`[botua] listening on ${config.server.host}:${config.server.port}`);
 
 // Start the job scheduler
-startScheduler(config, queue);
+const scheduler = await startScheduler(config, queue);
+setupGracefulShutdown(config, queue, server, scheduler);
 
 async function handleGitHubWebhook(req: Request): Promise<Response> {
   const signature = req.headers.get("x-hub-signature-256");

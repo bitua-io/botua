@@ -107,7 +107,7 @@ export async function createCheckRun(
     name: string;
     head_sha: string;
     status: "queued" | "in_progress" | "completed";
-    conclusion?: "success" | "failure" | "action_required";
+    conclusion?: "success" | "failure" | "action_required" | "cancelled";
     output?: { title: string; summary: string };
   },
 ): Promise<number> {
@@ -148,7 +148,7 @@ export async function updateCheckRun(
   checkRunId: number,
   params: {
     status?: "queued" | "in_progress" | "completed";
-    conclusion?: "success" | "failure" | "action_required";
+    conclusion?: "success" | "failure" | "action_required" | "cancelled";
     output?: { title: string; summary: string };
   },
 ): Promise<void> {
