@@ -80,6 +80,58 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
         },
       },
       {
+        name: "get_github_issue",
+        description: "Read an existing issue by number. Use this to see the current content before updating it.",
+        parameters: Type.Object({
+          issue_number: Type.Number({ description: "Issue number" }),
+        }),
+        async execute(_id: string, params: any) {
+          const res = await fetch(`${API}/repos/${owner}/${repoName}/issues/${params.issue_number}`, {
+            headers: apiHeaders,
+          });
+          if (!res.ok) return toolResult(`Issue #${params.issue_number} not found: ${res.status}`);
+          const issue = await res.json();
+          return toolResult(JSON.stringify({
+            number: issue.number,
+            title: issue.title,
+            body: issue.body,
+            state: issue.state,
+            labels: issue.labels?.map((l: any) => l.name) ?? [],
+            assignees: issue.assignees?.map((a: any) => a.login) ?? [],
+            html_url: issue.html_url,
+          }, null, 2));
+        },
+      },
+      {
+        name: "update_github_issue",
+        description: "Update an existing issue's title, body, labels, or state. Use this to add context, close issues, or modify existing ones.",
+        parameters: Type.Object({
+          issue_number: Type.Number({ description: "Issue number to update" }),
+          title: Type.Optional(Type.String({ description: "New title (omit to keep current)" })),
+          body: Type.Optional(Type.String({ description: "New body in markdown (omit to keep current)" })),
+          state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")], { description: "New state" })),
+          labels: Type.Optional(Type.Array(Type.String(), { description: "Replace labels" })),
+        }),
+        async execute(_id: string, params: any) {
+          const update: any = {};
+          if (params.title) update.title = params.title;
+          if (params.body) update.body = params.body;
+          if (params.state) update.state = params.state;
+          if (params.labels) update.labels = params.labels;
+
+          const res = await fetch(`${API}/repos/${owner}/${repoName}/issues/${params.issue_number}`, {
+            method: "PATCH",
+            headers: apiHeaders,
+            body: JSON.stringify(update),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            return toolResult(`Failed to update issue #${params.issue_number}: ${res.status} ${text}`);
+          }
+          return toolResult(`Updated issue #${params.issue_number}`);
+        },
+      },
+      {
         name: "update_check_run",
         description: "Update the Botua check run on this PR. Use this to change the conclusion (e.g., from 'action_required' to 'success') when the user acknowledges all review issues.",
         parameters: Type.Object({

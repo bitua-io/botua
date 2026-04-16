@@ -29,6 +29,30 @@ function createCommandTools() {
       },
     },
     {
+      name: "get_github_issue",
+      description: "Read an existing issue by number.",
+      parameters: Type.Object({
+        issue_number: Type.Number({ description: "Issue number" }),
+      }),
+      async execute(_id: string, params: any) {
+        return toolResult(JSON.stringify({ number: params.issue_number, title: "Test", body: "content" }));
+      },
+    },
+    {
+      name: "update_github_issue",
+      description: "Update an existing issue.",
+      parameters: Type.Object({
+        issue_number: Type.Number({ description: "Issue number to update" }),
+        title: Type.Optional(Type.String({ description: "New title" })),
+        body: Type.Optional(Type.String({ description: "New body" })),
+        state: Type.Optional(Type.Union([Type.Literal("open"), Type.Literal("closed")])),
+        labels: Type.Optional(Type.Array(Type.String())),
+      }),
+      async execute(_id: string, params: any) {
+        return toolResult(`Updated issue #${params.issue_number}`);
+      },
+    },
+    {
       name: "update_check_run",
       description: "Update the Botua check run on this PR.",
       parameters: Type.Object({
@@ -84,10 +108,12 @@ describe("command worker tools — pi contract", () => {
     }
   });
 
-  test("4 tools are defined", () => {
-    expect(tools).toHaveLength(4);
+  test("6 tools are defined", () => {
+    expect(tools).toHaveLength(6);
     expect(tools.map(t => t.name)).toEqual([
       "create_github_issue",
+      "get_github_issue",
+      "update_github_issue",
       "update_check_run",
       "comment_on_pr",
       "get_review_context",
