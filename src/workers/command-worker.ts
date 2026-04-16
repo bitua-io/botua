@@ -20,6 +20,11 @@ function send(msg: WorkerMessage) {
   self.postMessage(msg);
 }
 
+/** Helper to return pi-compatible tool result */
+function toolResult(text: string) {
+  return { content: [{ type: "text" as const, text }], details: {} };
+}
+
 self.onmessage = async (event: MessageEvent<InitMessage>) => {
   const msg = event.data;
   if (msg.type !== "init") return;
@@ -37,13 +42,14 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
 
     const [owner, repoName] = repo.split("/");
     const API = "https://api.github.com";
-    const headers = {
+    const apiHeaders = {
       Authorization: `token ${githubToken}`,
       Accept: "application/vnd.github+json",
       "Content-Type": "application/json",
     };
 
-    // Custom tools for the command agent
+    // Custom tools for the command agent — pi execute signature:
+    // execute(toolCallId, params, signal?, onUpdate?, ctx?) → { content: [...], details: {} }
     const commandTools = [
       {
         name: "create_github_issue",
@@ -54,23 +60,23 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
           labels: Type.Optional(Type.Array(Type.String(), { description: "Labels to add" })),
           assignees: Type.Optional(Type.Array(Type.String(), { description: "GitHub usernames to assign" })),
         }),
-        execute: async (input: { title: string; body: string; labels?: string[]; assignees?: string[] }) => {
+        async execute(_id: string, params: any) {
           const res = await fetch(`${API}/repos/${owner}/${repoName}/issues`, {
             method: "POST",
-            headers,
+            headers: apiHeaders,
             body: JSON.stringify({
-              title: input.title,
-              body: input.body,
-              labels: input.labels ?? [],
-              assignees: input.assignees ?? [],
+              title: params.title,
+              body: params.body,
+              labels: params.labels ?? [],
+              assignees: params.assignees ?? [],
             }),
           });
           if (!res.ok) {
             const text = await res.text();
-            return `Failed to create issue: ${res.status} ${text}`;
+            return toolResult(`Failed to create issue: ${res.status} ${text}`);
           }
           const issue = await res.json();
-          return `Created issue #${issue.number}: ${issue.html_url}`;
+          return toolResult(`Created issue #${issue.number}: ${issue.html_url}`);
         },
       },
       {
@@ -84,53 +90,34 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
           ], { description: "New conclusion for the check run" }),
           summary: Type.String({ description: "Updated summary explaining the change" }),
         }),
-        execute: async (input: { conclusion: string; summary: string }) => {
-          const checkRunId = payload.check_run_id;
-          if (!checkRunId) {
-            // Find the latest Botua check run on this PR
-            const headSha = payload.head_sha;
-            if (!headSha) return "No check run found — missing head_sha";
+        async execute(_id: string, params: any) {
+          // Find the latest Botua check run on this PR
+          const headSha = payload.head_sha;
+          if (!headSha) return toolResult("No check run found — missing head_sha");
 
-            const res = await fetch(`${API}/repos/${owner}/${repoName}/commits/${headSha}/check-runs`, {
-              headers,
-            });
-            if (!res.ok) return `Failed to find check runs: ${res.status}`;
-            const data = await res.json();
-            const botuaRun = data.check_runs?.find((r: any) => r.name === "Botua");
-            if (!botuaRun) return "No Botua check run found on this commit";
+          const res = await fetch(`${API}/repos/${owner}/${repoName}/commits/${headSha}/check-runs`, {
+            headers: apiHeaders,
+          });
+          if (!res.ok) return toolResult(`Failed to find check runs: ${res.status}`);
+          const data = await res.json();
+          const botuaRun = data.check_runs?.find((r: any) => r.name === "Botua");
+          if (!botuaRun) return toolResult("No Botua check run found on this commit");
 
-            const updateRes = await fetch(`${API}/repos/${owner}/${repoName}/check-runs/${botuaRun.id}`, {
-              method: "PATCH",
-              headers,
-              body: JSON.stringify({
-                status: "completed",
-                conclusion: input.conclusion,
-                completed_at: new Date().toISOString(),
-                output: {
-                  title: input.conclusion === "success" ? "Botua — Approved" : `Botua — ${input.conclusion}`,
-                  summary: input.summary,
-                },
-              }),
-            });
-            if (!updateRes.ok) return `Failed to update check run: ${updateRes.status}`;
-            return `Updated check run to ${input.conclusion}`;
-          }
-
-          const res = await fetch(`${API}/repos/${owner}/${repoName}/check-runs/${checkRunId}`, {
+          const updateRes = await fetch(`${API}/repos/${owner}/${repoName}/check-runs/${botuaRun.id}`, {
             method: "PATCH",
-            headers,
+            headers: apiHeaders,
             body: JSON.stringify({
               status: "completed",
-              conclusion: input.conclusion,
+              conclusion: params.conclusion,
               completed_at: new Date().toISOString(),
               output: {
-                title: input.conclusion === "success" ? "Botua — Approved" : `Botua — ${input.conclusion}`,
-                summary: input.summary,
+                title: params.conclusion === "success" ? "Botua — Approved" : `Botua — ${params.conclusion}`,
+                summary: params.summary,
               },
             }),
           });
-          if (!res.ok) return `Failed to update check run: ${res.status}`;
-          return `Updated check run to ${input.conclusion}`;
+          if (!updateRes.ok) return toolResult(`Failed to update check run: ${updateRes.status}`);
+          return toolResult(`Updated check run to ${params.conclusion}`);
         },
       },
       {
@@ -139,29 +126,29 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
         parameters: Type.Object({
           body: Type.String({ description: "Comment body in markdown" }),
         }),
-        execute: async (input: { body: string }) => {
+        async execute(_id: string, params: any) {
           const prNumber = payload.pr_number;
-          if (!prNumber) return "No PR number available";
+          if (!prNumber) return toolResult("No PR number available");
 
           const res = await fetch(`${API}/repos/${owner}/${repoName}/issues/${prNumber}/comments`, {
             method: "POST",
-            headers,
-            body: JSON.stringify({ body: input.body }),
+            headers: apiHeaders,
+            body: JSON.stringify({ body: params.body }),
           });
-          if (!res.ok) return `Failed to post comment: ${res.status}`;
-          return "Comment posted";
+          if (!res.ok) return toolResult(`Failed to post comment: ${res.status}`);
+          return toolResult("Comment posted successfully");
         },
       },
       {
         name: "get_review_context",
         description: "Get the latest Botua review and check run status for this PR.",
         parameters: Type.Object({}),
-        execute: async () => {
+        async execute() {
           const prNumber = payload.pr_number;
-          if (!prNumber) return "No PR number";
+          if (!prNumber) return toolResult("No PR number");
 
           // Get latest botua comment
-          const commentsRes = await fetch(`${API}/repos/${owner}/${repoName}/issues/${prNumber}/comments?per_page=100`, { headers });
+          const commentsRes = await fetch(`${API}/repos/${owner}/${repoName}/issues/${prNumber}/comments?per_page=100`, { headers: apiHeaders });
           const comments = commentsRes.ok ? await commentsRes.json() : [];
           const botuaComment = [...comments].reverse().find((c: any) => c.body?.includes("<!-- botua -->"));
 
@@ -169,24 +156,24 @@ self.onmessage = async (event: MessageEvent<InitMessage>) => {
           const headSha = payload.head_sha;
           let checkRun = null;
           if (headSha) {
-            const checksRes = await fetch(`${API}/repos/${owner}/${repoName}/commits/${headSha}/check-runs`, { headers });
+            const checksRes = await fetch(`${API}/repos/${owner}/${repoName}/commits/${headSha}/check-runs`, { headers: apiHeaders });
             if (checksRes.ok) {
               const data = await checksRes.json();
               checkRun = data.check_runs?.find((r: any) => r.name === "Botua");
             }
           }
 
-          return JSON.stringify({
+          return toolResult(JSON.stringify({
             review: botuaComment ? { body: botuaComment.body.slice(0, 2000), updated: botuaComment.updated_at } : null,
             check_run: checkRun ? { id: checkRun.id, conclusion: checkRun.conclusion, title: checkRun.output?.title } : null,
-          }, null, 2);
+          }, null, 2));
         },
       },
     ];
 
     send({ type: "progress", jobId, step: "Creating agent session" });
 
-    // Pass at least one built-in tool so pi's tool-calling loop activates
+    // Pass built-in tools so pi's tool-calling loop activates
     const builtInTools = createReadOnlyTools(process.cwd());
 
     const { session } = await createAgentSession({

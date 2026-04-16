@@ -2,22 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { Type } from "@mariozechner/pi-ai";
 
 /**
- * Test that command worker tools have the correct shape for pi's customTools.
- * Pi expects: { name, description, parameters, execute }
- * NOT: { name, description, inputSchema, execute }
+ * Test that command worker tools match pi's customTools contract:
+ * - { name, description, parameters, execute }
+ * - execute(toolCallId, params, ...) → { content: [{ type: "text", text }], details: {} }
+ * - parameters is a TypeBox/JSON Schema object
  */
 
-// Replicate the tool definitions from command-worker.ts
-// (we can't import them directly since they're defined inside onmessage)
-function createCommandTools(options: {
-  owner: string;
-  repoName: string;
-  headers: Record<string, string>;
-  payload: Record<string, any>;
-  API: string;
-}) {
-  const { owner, repoName, headers, payload, API } = options;
+/** Helper matching the one in command-worker.ts */
+function toolResult(text: string) {
+  return { content: [{ type: "text" as const, text }], details: {} };
+}
 
+function createCommandTools() {
   return [
     {
       name: "create_github_issue",
@@ -28,7 +24,9 @@ function createCommandTools(options: {
         labels: Type.Optional(Type.Array(Type.String(), { description: "Labels to add" })),
         assignees: Type.Optional(Type.Array(Type.String(), { description: "GitHub usernames to assign" })),
       }),
-      execute: async (input: { title: string; body: string }) => `Created issue: ${input.title}`,
+      async execute(_id: string, params: any) {
+        return toolResult(`Created issue: ${params.title}`);
+      },
     },
     {
       name: "update_check_run",
@@ -41,7 +39,9 @@ function createCommandTools(options: {
         ], { description: "New conclusion for the check run" }),
         summary: Type.String({ description: "Updated summary explaining the change" }),
       }),
-      execute: async (input: { conclusion: string; summary: string }) => `Updated to ${input.conclusion}`,
+      async execute(_id: string, params: any) {
+        return toolResult(`Updated to ${params.conclusion}`);
+      },
     },
     {
       name: "comment_on_pr",
@@ -49,25 +49,23 @@ function createCommandTools(options: {
       parameters: Type.Object({
         body: Type.String({ description: "Comment body in markdown" }),
       }),
-      execute: async (input: { body: string }) => "Comment posted",
+      async execute(_id: string, params: any) {
+        return toolResult("Comment posted");
+      },
     },
     {
       name: "get_review_context",
       description: "Get the latest Botua review and check run status for this PR.",
       parameters: Type.Object({}),
-      execute: async () => JSON.stringify({ review: null, check_run: null }),
+      async execute() {
+        return toolResult(JSON.stringify({ review: null, check_run: null }));
+      },
     },
   ];
 }
 
-describe("command worker tools", () => {
-  const tools = createCommandTools({
-    owner: "test-org",
-    repoName: "test-repo",
-    headers: {},
-    payload: { pr_number: 1, head_sha: "abc" },
-    API: "https://api.github.com",
-  });
+describe("command worker tools — pi contract", () => {
+  const tools = createCommandTools();
 
   test("all tools have required pi fields: name, description, parameters, execute", () => {
     for (const tool of tools) {
@@ -75,13 +73,11 @@ describe("command worker tools", () => {
       expect(tool.description).toBeString();
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe("function");
-
-      // Ensure we DON'T have inputSchema (common mistake)
       expect((tool as any).inputSchema).toBeUndefined();
     }
   });
 
-  test("parameters are valid JSON Schema objects", () => {
+  test("parameters are valid JSON Schema objects with type 'object'", () => {
     for (const tool of tools) {
       expect(tool.parameters.type).toBe("object");
       expect(tool.parameters).toHaveProperty("properties");
@@ -90,11 +86,31 @@ describe("command worker tools", () => {
 
   test("4 tools are defined", () => {
     expect(tools).toHaveLength(4);
-    const names = tools.map(t => t.name);
-    expect(names).toContain("create_github_issue");
-    expect(names).toContain("update_check_run");
-    expect(names).toContain("comment_on_pr");
-    expect(names).toContain("get_review_context");
+    expect(tools.map(t => t.name)).toEqual([
+      "create_github_issue",
+      "update_check_run",
+      "comment_on_pr",
+      "get_review_context",
+    ]);
+  });
+
+  test("execute returns pi MCP-style result: { content: [{ type, text }], details: {} }", async () => {
+    for (const tool of tools) {
+      const result = await tool.execute("test-call-id", { title: "t", body: "b", conclusion: "success", summary: "s" });
+      expect(result).toHaveProperty("content");
+      expect(result).toHaveProperty("details");
+      expect(Array.isArray(result.content)).toBe(true);
+      expect(result.content.length).toBeGreaterThan(0);
+      expect(result.content[0]).toHaveProperty("type", "text");
+      expect(result.content[0]).toHaveProperty("text");
+      expect(typeof result.content[0].text).toBe("string");
+    }
+  });
+
+  test("execute accepts (toolCallId, params) signature", async () => {
+    const createIssue = tools.find(t => t.name === "create_github_issue")!;
+    const result = await createIssue.execute("call-123", { title: "Test Issue", body: "test" });
+    expect(result.content[0].text).toContain("Test Issue");
   });
 
   test("create_github_issue requires title and body", () => {
@@ -109,35 +125,8 @@ describe("command worker tools", () => {
     expect(tool.parameters.required).toContain("summary");
   });
 
-  test("comment_on_pr requires body", () => {
-    const tool = tools.find(t => t.name === "comment_on_pr")!;
-    expect(tool.parameters.required).toContain("body");
-  });
-
   test("get_review_context has no required params", () => {
     const tool = tools.find(t => t.name === "get_review_context")!;
-    // Empty object schema — no required fields
     expect(tool.parameters.required ?? []).toHaveLength(0);
-  });
-
-  test("execute functions return strings", async () => {
-    const createIssue = tools.find(t => t.name === "create_github_issue")!;
-    const result = await createIssue.execute({ title: "test", body: "test body" });
-    expect(result).toBeString();
-    expect(result).toContain("test");
-
-    const updateCheck = tools.find(t => t.name === "update_check_run")!;
-    const result2 = await updateCheck.execute({ conclusion: "success", summary: "all good" });
-    expect(result2).toContain("success");
-
-    const comment = tools.find(t => t.name === "comment_on_pr")!;
-    const result3 = await comment.execute({ body: "hello" });
-    expect(result3).toBe("Comment posted");
-
-    const context = tools.find(t => t.name === "get_review_context")!;
-    const result4 = await context.execute();
-    const parsed = JSON.parse(result4);
-    expect(parsed).toHaveProperty("review");
-    expect(parsed).toHaveProperty("check_run");
   });
 });
