@@ -30,6 +30,37 @@ export interface ClassifyResponse {
   reason?: string;
 }
 
+/** Parse classifier model output into a structured response */
+export function parseClassifierOutput(id: string, output: string): ClassifyResponse {
+  const defaultResponse: ClassifyResponse = {
+    type: "classification",
+    id,
+    relevant: false,
+    intent: "unrelated",
+    confidence: 0,
+    reason: "Failed to parse classifier output",
+  };
+
+  if (!output.trim()) return defaultResponse;
+
+  const jsonMatch = output.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return defaultResponse;
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      type: "classification",
+      id,
+      relevant: parsed.relevant ?? false,
+      intent: parsed.intent ?? "unrelated",
+      confidence: Math.max(0, Math.min(1, parsed.confidence ?? 0)),
+      reason: parsed.reason,
+    };
+  } catch {
+    return defaultResponse;
+  }
+}
+
 const SYSTEM_PROMPT = `You are a classifier for a PR review bot called Botua. Your ONLY job is to classify comments on pull requests.
 
 Given:
@@ -112,31 +143,10 @@ Classify this comment. Respond with ONLY a JSON object.`;
 
     await session.prompt(prompt);
     const output = session.getLastAssistantText?.() ?? "";
-    console.log(`[classifier] raw output: ${output.slice(0, 200)}`);
+    console.log(`[classifier] raw output: ${output.slice(0, 300)}`);
 
-    // Parse the JSON response
-    const jsonMatch = output.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const response: ClassifyResponse = {
-        type: "classification",
-        id: req.id,
-        relevant: parsed.relevant ?? false,
-        intent: parsed.intent ?? "unrelated",
-        confidence: parsed.confidence ?? 0,
-        reason: parsed.reason,
-      };
-      self.postMessage(response);
-    } else {
-      self.postMessage({
-        type: "classification",
-        id: req.id,
-        relevant: false,
-        intent: "unrelated",
-        confidence: 0,
-        reason: "Failed to parse classifier output",
-      } satisfies ClassifyResponse);
-    }
+    const response = parseClassifierOutput(req.id, output);
+    self.postMessage(response);
   } catch (err: any) {
     console.error(`[classifier] error:`, err.message, err.stack?.split("\n")[1] ?? "");
     self.postMessage({
