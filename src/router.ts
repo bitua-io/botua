@@ -94,13 +94,42 @@ async function handleMention(ctx: WebhookContext): Promise<RouteResult | null> {
     return handlePRReview({ ...ctx, payload: { ...payload, _force_review: true } });
   }
 
-  // For any other @botua mention — acknowledge with 👀 reaction.
-  // The comment itself becomes context for the next review (via PR comment fetching).
-  // No job needed — the user's message is already stored in the PR thread.
+  // React with 👀 to acknowledge, then queue a command job for the agent to process
   await reactToComment(config, repo, commentId, "eyes");
 
-  console.log(`[router] acknowledged @botua mention on ${repo}#${prNumber}: "${command}"`);
-  return { action: "acknowledged", skipped: "message noted — will be included in next review context" };
+  // Get the head SHA from the PR so the command worker can find the check run
+  let headSha: string | undefined;
+  let checkRunId: number | undefined;
+  if (repo && prNumber && config.github.app_id) {
+    try {
+      const [owner, repoName] = repo.split("/");
+      const installationId = await findInstallation(config, owner, repoName);
+      const token = await getInstallationToken(config, installationId);
+      const prRes = await fetch(`https://api.github.com/repos/${owner}/${repoName}/pulls/${prNumber}`, {
+        headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (prRes.ok) {
+        const prData = await prRes.json();
+        headSha = prData.head?.sha;
+      }
+    } catch {}
+  }
+
+  const jobId = ctx.queue.createJob({
+    repo,
+    type: "pr-command",
+    payload: {
+      pr_number: prNumber,
+      command,
+      comment_id: commentId,
+      comment_body: comment,
+      user: payload.comment?.user?.login ?? payload.sender?.login,
+      head_sha: headSha,
+      check_run_id: checkRunId,
+    },
+  });
+
+  return { jobId, action: "pr-command" };
 }
 
 /** React to a comment on GitHub */

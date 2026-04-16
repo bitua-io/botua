@@ -77,10 +77,16 @@ async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Prom
     token = process.env.GITHUB_TOKEN ?? "";
   }
 
-  // Prepare repo worktree
-  const ref = job.payload.head_branch ?? "main";
-  await ensureBareClone(config, job.repo, token);
-  const workDir = await createWorktree(config, job.repo, ref, job.id);
+  // Determine job type
+  const isReview = job.type === "pr-review";
+
+  // Prepare repo worktree (only for review jobs — command jobs don't need code)
+  let workDir = process.cwd();
+  if (isReview) {
+    const ref = job.payload.head_branch ?? "main";
+    await ensureBareClone(config, job.repo, token);
+    workDir = await createWorktree(config, job.repo, ref, job.id);
+  }
 
   // Fetch diff and PR comments if not in payload
   if (job.payload.pr_number) {
@@ -109,7 +115,6 @@ async function dispatchJob(config: BotuaConfig, queue: JobQueue, job: Job): Prom
   }));
 
   // Determine worker type and timeout
-  const isReview = job.type === "pr-review";
   const workerPath = isReview
     ? new URL("./workers/review-worker.ts", import.meta.url).href
     : new URL("./workers/command-worker.ts", import.meta.url).href;
