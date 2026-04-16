@@ -203,6 +203,38 @@ describe("router — command extraction", () => {
     expect(job!.payload.command).toBe("this is a false positive");
   });
 
+  test("ignores @botua in quoted text, uses the actual message", async () => {
+    const result = await routeEvent(makeCtx("issue_comment.created", {
+      comment: {
+        body: "> use `@botua review` to trigger one. 🙌\r\n\r\npero agrega más detalles al issue #966",
+        user: { login: "dev", type: "User" },
+        id: 1,
+      },
+      issue: { number: 5, pull_request: { url: "..." } },
+      repository: { full_name: "org/repo" },
+    }));
+
+    // The @botua is only in the quoted part — this should go through passive classification
+    // Since there's no completed review in our test DB, it should return null
+    expect(result).toBeNull();
+  });
+
+  test("finds @botua in non-quoted part when both quoted and unquoted exist", async () => {
+    const result = await routeEvent(makeCtx("issue_comment.created", {
+      comment: {
+        body: "> some quoted text with @botua review\r\n\r\n@botua add more context to the issue",
+        user: { login: "dev", type: "User" },
+        id: 1,
+      },
+      issue: { number: 5, pull_request: { url: "..." } },
+      repository: { full_name: "org/repo" },
+    }));
+
+    expect(result?.action).toBe("pr-command");
+    const job = queue.getJob(result!.jobId!);
+    expect(job!.payload.command).toBe("add more context to the issue");
+  });
+
   test("handles @botua-dev and @botua-review-bot mentions", async () => {
     for (const mention of ["@botua-dev do something", "@botua-review-bot do something"]) {
       const result = await routeEvent(makeCtx("issue_comment.created", {

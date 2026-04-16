@@ -130,9 +130,12 @@ async function handleComment(ctx: WebhookContext): Promise<RouteResult | null> {
     return null;
   }
 
-  // Path 1: Explicit @botua mention → direct command
-  if (comment.includes("@botua")) {
-    return handleDirectMention(ctx, comment, repo, prNumber, commentId, commentAuthor);
+  // Strip quoted lines (> ...) to avoid matching @botua inside quotes
+  const unquotedComment = stripQuotedLines(comment);
+
+  // Path 1: Explicit @botua mention in the actual (non-quoted) text → direct command
+  if (unquotedComment.includes("@botua")) {
+    return handleDirectMention(ctx, comment, unquotedComment, repo, prNumber, commentId, commentAuthor);
   }
 
   // Path 2: No mention → check if PR has a botua review, then classify
@@ -142,14 +145,15 @@ async function handleComment(ctx: WebhookContext): Promise<RouteResult | null> {
 /** Handle explicit @botua mentions — fast path, always acts */
 async function handleDirectMention(
   ctx: WebhookContext,
-  comment: string,
+  fullComment: string,
+  unquotedComment: string,
   repo: string,
   prNumber: number,
   commentId: number,
   commentAuthor: string,
 ): Promise<RouteResult> {
   const { config } = ctx;
-  const command = extractCommand(comment);
+  const command = extractCommand(unquotedComment);
 
   console.log(`[router] @botua command: "${command}" on ${repo}#${prNumber}`);
 
@@ -161,7 +165,7 @@ async function handleDirectMention(
 
   // React and queue command job
   await reactToComment(config, repo, commentId, "eyes");
-  return queueCommandJob(ctx, repo, prNumber, commentId, comment, command, commentAuthor);
+  return queueCommandJob(ctx, repo, prNumber, commentId, fullComment, command, commentAuthor);
 }
 
 /** Handle non-mentioned comments — classify first, only act if relevant */
@@ -318,8 +322,17 @@ async function reactToComment(config: BotuaConfig, repo: string, commentId: numb
   }
 }
 
+/** Strip GitHub-style quoted lines (> ...) from a comment */
+function stripQuotedLines(comment: string): string {
+  return comment
+    .split("\n")
+    .filter(line => !line.trimStart().startsWith(">"))
+    .join("\n")
+    .trim();
+}
+
 function extractCommand(comment: string): string {
-  const match = comment.match(/@botua\s+([\s\S]*)/i);
+  const match = comment.match(/@botua[\w-]*\s+([\s\S]*)/i);
   if (!match) return comment;
   return match[1].split("\n")[0].trim();
 }
